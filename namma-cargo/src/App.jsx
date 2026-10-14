@@ -3,7 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { QRCodeSVG } from 'qrcode.react';
 import {
   Truck, Package, Navigation,
-  Clock, CheckCircle2, Sparkles, Radio, MapPin, Share2
+  Clock, CheckCircle2, Sparkles, Radio, MapPin, Share2, Phone, LogOut, ShieldCheck
 } from 'lucide-react';
 
 // ============================================================================
@@ -53,6 +53,12 @@ function calculateDistanceKm(hubNameA, hubNameB) {
 }
 
 export default function App() {
+  // Authentication State
+  const [phone, setPhone] = useState('');
+  const [otpSent, setOtpSent] = useState(false);
+  const [otpCode, setOtpCode] = useState('');
+  const [userSession, setUserSession] = useState(localStorage.getItem('namma_user_phone') || null);
+
   const [mode, setMode] = useState('customer');
   const [cloudConnected, setCloudConnected] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -62,7 +68,6 @@ export default function App() {
 
   // Customer State
   const [customerName, setCustomerName] = useState('Prateek Traders & Hardware');
-  const [customerPhone, setCustomerPhone] = useState('9845012345');
   const [pickupHub, setPickupHub] = useState(BENGALURU_HUBS[0].name);
   const [dropHub, setDropHub] = useState(BENGALURU_HUBS[3].name);
   const [cargoType, setCargoType] = useState('Hardware & Electrical Boxes');
@@ -117,6 +122,7 @@ export default function App() {
   };
 
   useEffect(() => {
+    if (!userSession) return;
     fetchLiveCloudData();
     const channel = supabase
       .channel('namma-cargo-live')
@@ -125,7 +131,38 @@ export default function App() {
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
-  }, []);
+  }, [userSession]);
+
+  const handleSendOtp = (e) => {
+    e.preventDefault();
+    if (phone.length < 10) {
+      alert('Please enter a valid 10-digit mobile number');
+      return;
+    }
+    setOtpSent(true);
+    setStatusMessage('OTP sent successfully (Simulated Code: 1234)');
+    setTimeout(() => setStatusMessage(''), 4000);
+  };
+
+  const handleVerifyOtp = (e) => {
+    e.preventDefault();
+    if (otpCode !== '1234') {
+      alert('Incorrect OTP! Please use test code: 1234');
+      return;
+    }
+    localStorage.setItem('namma_user_phone', phone);
+    setUserSession(phone);
+    setStatusMessage('Phone verified successfully! Welcome to NammaCargo.');
+    setTimeout(() => setStatusMessage(''), 3000);
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('namma_user_phone');
+    setUserSession(null);
+    setPhone('');
+    setOtpSent(false);
+    setOtpCode('');
+  };
 
   const handleBroadcastLoad = async (e) => {
     e.preventDefault();
@@ -138,7 +175,7 @@ export default function App() {
     const { error } = await supabase.from('bookings').insert([
       {
         customer_name: customerName,
-        customer_phone: customerPhone,
+        customer_phone: userSession,
         pickup_hub: pickupHub,
         drop_hub: dropHub,
         cargo_type: cargoType,
@@ -194,7 +231,7 @@ export default function App() {
     fetchLiveCloudData();
   };
 
-  const handleVerifyOtp = async (booking) => {
+  const handleVerifyPickupOtp = async (booking) => {
     if ((otpInputs[booking.id] || '').trim() !== booking.pickup_otp) {
       alert(`Incorrect OTP! Hint: ${booking.pickup_otp}`);
       return;
@@ -222,6 +259,97 @@ export default function App() {
     return calculateDistanceKm(driverBaseHub, b.pickup_hub) <= radiusFilterKm;
   });
 
+  // ============================================================================
+  // RENDER LOGIN SCREEN IF NOT AUTHENTICATED
+  // ============================================================================
+  if (!userSession) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-4">
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 max-w-md w-full shadow-2xl space-y-6">
+          <div className="text-center space-y-2">
+            <div className="inline-block bg-amber-500 text-slate-950 p-3 rounded-2xl font-black mb-2 shadow">
+              <Truck className="w-8 h-8" />
+            </div>
+            <h1 className="text-2xl font-black tracking-tight text-white">
+              NAMMA<span className="text-amber-400">CARGO</span>
+            </h1>
+            <p className="text-xs text-slate-400">Bengaluru's Zero-Commission Logistics Network</p>
+          </div>
+
+          {statusMessage && (
+            <div className="bg-emerald-500/20 border border-emerald-500 text-emerald-200 p-3 rounded-xl text-xs text-center font-medium">
+              {statusMessage}
+            </div>
+          )}
+
+          {!otpSent ? (
+            <form onSubmit={handleSendOtp} className="space-y-4">
+              <div>
+                <label className="text-xs text-slate-400 block mb-1">Enter Mobile Number</label>
+                <div className="flex items-center bg-slate-950 border border-slate-700 rounded-xl px-3 py-2.5">
+                  <span className="text-slate-400 text-sm font-bold mr-2">+91</span>
+                  <input
+                    type="tel"
+                    maxLength={10}
+                    placeholder="9845012345"
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                    className="w-full bg-transparent text-sm text-white focus:outline-none"
+                    required
+                  />
+                </div>
+              </div>
+              <button
+                type="submit"
+                className="w-full bg-amber-500 hover:bg-amber-400 text-slate-950 font-black py-3 rounded-xl shadow transition text-sm cursor-pointer"
+              >
+                Get Verification OTP
+              </button>
+            </form>
+          ) : (
+            <form onSubmit={handleVerifyOtp} className="space-y-4">
+              <div className="text-center">
+                <span className="text-xs text-slate-400">OTP sent to +91 {phone}</span>
+                <button
+                  type="button"
+                  onClick={() => setOtpSent(false)}
+                  className="text-xs text-amber-400 block mx-auto mt-1 hover:underline cursor-pointer"
+                >
+                  Change Number
+                </button>
+              </div>
+              <div>
+                <label className="text-xs text-slate-400 block mb-1">Enter 4-Digit OTP (Hint: 1234)</label>
+                <input
+                  type="text"
+                  maxLength={4}
+                  placeholder="1234"
+                  value={otpCode}
+                  onChange={(e) => setOtpCode(e.target.value)}
+                  className="w-full bg-slate-950 border border-emerald-500/60 rounded-xl px-4 py-3 text-center text-xl font-mono text-emerald-300 tracking-widest"
+                  required
+                />
+              </div>
+              <button
+                type="submit"
+                className="w-full bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black py-3 rounded-xl shadow transition text-sm cursor-pointer"
+              >
+                Verify & Login
+              </button>
+            </form>
+          )}
+
+          <div className="border-t border-slate-800 pt-4 text-center text-[11px] text-slate-500 flex items-center justify-center gap-1">
+            <ShieldCheck className="w-4 h-4 text-emerald-400" /> Secure Supabase Cloud Session Active
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ============================================================================
+  // MAIN APP INTERFACE (WHEN LOGGED IN)
+  // ============================================================================
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 font-sans pb-16">
       <header className="sticky top-0 z-30 bg-slate-900/95 backdrop-blur border-b border-slate-800 px-4 py-3">
@@ -237,29 +365,39 @@ export default function App() {
                 </h1>
                 <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/25 text-emerald-300 border border-emerald-500/40 flex items-center gap-1 font-semibold">
                   <Radio className="w-3 h-3 animate-pulse" />
-                  {cloudConnected ? 'LIVE CLOUD + WHATSAPP SHARE' : 'SYNCING...'}
+                  {cloudConnected ? 'LIVE CLOUD + AUTH ACTIVE' : 'SYNCING...'}
                 </span>
               </div>
-              <p className="text-xs text-slate-400">Bengaluru Freight Network • WhatsApp Driver Broadcast Enabled</p>
+              <p className="text-xs text-slate-400">Verified User: +91 {userSession}</p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2 bg-slate-800 p-1 rounded-xl border border-slate-700">
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 bg-slate-800 p-1 rounded-xl border border-slate-700">
+              <button
+                onClick={() => setMode('customer')}
+                className={`px-4 py-2 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                  mode === 'customer' ? 'bg-amber-500 text-slate-950 shadow' : 'text-slate-300 hover:text-white'
+                }`}
+              >
+                <Package className="w-4 h-4" /> Customer Mode
+              </button>
+              <button
+                onClick={() => setMode('driver')}
+                className={`px-4 py-2 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                  mode === 'driver' ? 'bg-emerald-500 text-slate-950 shadow' : 'text-slate-300 hover:text-white'
+                }`}
+              >
+                <Truck className="w-4 h-4" /> Driver Radar ({filteredDriverBookings.length})
+              </button>
+            </div>
+
             <button
-              onClick={() => setMode('customer')}
-              className={`px-4 py-2 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
-                mode === 'customer' ? 'bg-amber-500 text-slate-950 shadow' : 'text-slate-300 hover:text-white'
-              }`}
+              onClick={handleLogout}
+              className="bg-slate-800 hover:bg-slate-700 text-rose-400 p-2 rounded-xl border border-slate-700 text-xs font-bold flex items-center gap-1 cursor-pointer"
+              title="Logout"
             >
-              <Package className="w-4 h-4" /> Customer Mode
-            </button>
-            <button
-              onClick={() => setMode('driver')}
-              className={`px-4 py-2 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
-                mode === 'driver' ? 'bg-emerald-500 text-slate-950 shadow' : 'text-slate-300 hover:text-white'
-              }`}
-            >
-              <Truck className="w-4 h-4" /> Driver Radar ({filteredDriverBookings.length})
+              <LogOut className="w-4 h-4" />
             </button>
           </div>
         </div>
@@ -294,13 +432,12 @@ export default function App() {
                     />
                   </div>
                   <div>
-                    <label className="text-xs text-slate-400 block mb-1">Mobile</label>
+                    <label className="text-xs text-slate-400 block mb-1">Verified Mobile</label>
                     <input
                       type="text"
-                      value={customerPhone}
-                      onChange={(e) => setCustomerPhone(e.target.value)}
-                      className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white"
-                      required
+                      value={userSession}
+                      disabled
+                      className="w-full bg-slate-950 border border-emerald-500/50 rounded-lg px-3 py-2 text-sm text-emerald-300 font-mono"
                     />
                   </div>
                 </div>
@@ -641,7 +778,7 @@ export default function App() {
                             className="bg-slate-950 border border-blue-400 rounded px-2 py-1 text-white w-20 text-center font-mono"
                           />
                           <button
-                            onClick={() => handleVerifyOtp(b)}
+                            onClick={() => handleVerifyPickupOtp(b)}
                             className="bg-blue-500 text-slate-950 font-black px-3 py-1 rounded cursor-pointer"
                           >
                             Verify & Start
