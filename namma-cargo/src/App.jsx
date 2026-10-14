@@ -3,8 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { QRCodeSVG } from 'qrcode.react';
 import {
   Truck, Package, Navigation,
-  Clock, CheckCircle2, AlertTriangle, RefreshCw,
-  UserCheck, Sparkles, Radio, MapPin, Filter
+  Clock, CheckCircle2, Sparkles, Radio, MapPin, Share2
 } from 'lucide-react';
 
 // ============================================================================
@@ -23,18 +22,18 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 // 2. BENGALURU HUBS WITH GPS COORDINATES FOR RADIUS MATCHING
 // ============================================================================
 const BENGALURU_HUBS = [
-  { name: 'Avalahalli / Old Madras Rd', zone: 'East Corridor', lat: 13.0121, lng: 77.7122, trafficNote: 'Check Tin Factory / KR Puram merge' },
-  { name: 'KR Puram / Tin Factory', zone: 'East', lat: 13.0036, lng: 77.6863, trafficNote: 'Heavy peak-hour bottleneck' },
-  { name: 'Whitefield / ITPL Main Rd', zone: 'East Tech & Warehousing', lat: 12.9698, lng: 77.7499, trafficNote: 'Smooth via Hoodi link road' },
-  { name: 'Peenya Industrial Area (1st-4th Stage)', zone: 'North-West Industrial', lat: 13.0296, lng: 77.5223, trafficNote: 'Heavy truck corridor via Goraguntepalya' },
-  { name: 'Yeshwanthpur APMC Yard', zone: 'North-West Wholesale', lat: 13.0247, lng: 77.5539, trafficNote: 'RMC Yard loading gates busy 8 AM - 12 PM' },
-  { name: 'KR Market / Chickpet / SP Road', zone: 'Central Wholesale', lat: 12.9647, lng: 77.5797, trafficNote: 'Narrow lanes: 2W & 3W Cargo Auto preferred' },
-  { name: 'Electronic City Phase 1 & 2', zone: 'South Industrial', lat: 12.8399, lng: 77.6770, trafficNote: 'Fast access via Elevated Expressway' },
-  { name: 'Bommasandra Industrial Area', zone: 'Deep South Manufacturing', lat: 12.8124, lng: 77.6917, trafficNote: 'Hosur Road commercial corridor' },
-  { name: 'Koramangala / HSR Layout', zone: 'South-East Commercial', lat: 12.9352, lng: 77.6245, trafficNote: 'Watch Silk Board Junction congestion' },
-  { name: 'Indiranagar / Domlur', zone: 'Central-East Retail', lat: 12.9719, lng: 77.6412, trafficNote: '100 Feet Road commercial loading zones' },
-  { name: 'Hebbal / Yelahanka', zone: 'North Corridor', lat: 13.0358, lng: 77.5970, trafficNote: 'Airport Road flyover clear' },
-  { name: 'Mysore Road / Kengeri', zone: 'West Corridor', trafficNote: '12.9250', lat: 12.9250, lng: 77.4981, trafficNote: 'NICE Road interchange easy for 4W/6W trucks' }
+  { name: 'Avalahalli / Old Madras Rd', zone: 'East Corridor', lat: 13.0121, lng: 77.7122 },
+  { name: 'KR Puram / Tin Factory', zone: 'East', lat: 13.0036, lng: 77.6863 },
+  { name: 'Whitefield / ITPL Main Rd', zone: 'East Tech & Warehousing', lat: 12.9698, lng: 77.7499 },
+  { name: 'Peenya Industrial Area (1st-4th Stage)', zone: 'North-West Industrial', lat: 13.0296, lng: 77.5223 },
+  { name: 'Yeshwanthpur APMC Yard', zone: 'North-West Wholesale', lat: 13.0247, lng: 77.5539 },
+  { name: 'KR Market / Chickpet / SP Road', zone: 'Central Wholesale', lat: 12.9647, lng: 77.5797 },
+  { name: 'Electronic City Phase 1 & 2', zone: 'South Industrial', lat: 12.8399, lng: 77.6770 },
+  { name: 'Bommasandra Industrial Area', zone: 'Deep South Manufacturing', lat: 12.8124, lng: 77.6917 },
+  { name: 'Koramangala / HSR Layout', zone: 'South-East Commercial', lat: 12.9352, lng: 77.6245 },
+  { name: 'Indiranagar / Domlur', zone: 'Central-East Retail', lat: 12.9719, lng: 77.6412 },
+  { name: 'Hebbal / Yelahanka', zone: 'North Corridor', lat: 13.0358, lng: 77.5970 },
+  { name: 'Mysore Road / Kengeri', zone: 'West Corridor', lat: 12.9250, lng: 77.4981 }
 ];
 
 const FLEET_TYPES = [
@@ -44,20 +43,15 @@ const FLEET_TYPES = [
   { id: '6W', name: '6W+ Heavy Commercial Truck', maxWeight: 10000, baseFare: 950, perKm: 52, badge: '1,501 - 10,000 kg' }
 ];
 
-// Haversine formula to calculate distance in km between two hubs
 function calculateDistanceKm(hubNameA, hubNameB) {
   const hA = BENGALURU_HUBS.find((h) => h.name === hubNameA) || BENGALURU_HUBS[0];
   const hB = BENGALURU_HUBS.find((h) => h.name === hubNameB) || BENGALURU_HUBS[3];
-  
-  const R = 6371; // Earth radius in km
+  const R = 6371;
   const dLat = ((hB.lat - hA.lat) * Math.PI) / 180;
   const dLon = ((hB.lng - hA.lng) * Math.PI) / 180;
   const a =
     Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos((hA.lat * Math.PI) / 180) *
-      Math.cos((hB.lat * Math.PI) / 180) *
-      Math.sin(dLon / 2) *
-      Math.sin(dLon / 2);
+    Math.cos((hA.lat * Math.PI) / 180) * Math.cos((hB.lat * Math.PI) / 180) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return Math.round(R * c * 10) / 10;
 }
@@ -85,15 +79,14 @@ export default function App() {
   const [driverName, setDriverName] = useState('Raju Gowda');
   const [driverVehicle, setDriverVehicle] = useState('KA-53-C-4821 (3W Ape Cargo)');
   const [driverUpi, setDriverUpi] = useState('rajugowda@ybl');
-  const [driverBaseHub, setDriverBaseHub] = useState(BENGALURU_HUBS[3].name); // e.g. Peenya
-  const [radiusFilterKm, setRadiusFilterKm] = useState(25); // Max km radius
+  const [driverBaseHub, setDriverBaseHub] = useState(BENGALURU_HUBS[3].name);
+  const [radiusFilterKm, setRadiusFilterKm] = useState(25);
   const [bidInputs, setBidInputs] = useState({});
   const [otpInputs, setOtpInputs] = useState({});
   const [statusMessage, setStatusMessage] = useState('');
 
   useEffect(() => {
-    const autoFleet =
-      FLEET_TYPES.find((f) => weightKg <= f.maxWeight) || FLEET_TYPES[FLEET_TYPES.length - 1];
+    const autoFleet = FLEET_TYPES.find((f) => weightKg <= f.maxWeight) || FLEET_TYPES[FLEET_TYPES.length - 1];
     setSelectedFleet(autoFleet.id);
 
     const distKm = calculateDistanceKm(pickupHub, dropHub);
@@ -109,10 +102,7 @@ export default function App() {
       .order('created_at', { ascending: false })
       .limit(20);
 
-    const { data: bidData } = await supabase
-      .from('bids')
-      .select('*')
-      .order('created_at', { ascending: true });
+    const { data: bidData } = await supabase.from('bids').select('*').order('created_at', { ascending: true });
 
     if (!bErr && bData) {
       setBookings(bData);
@@ -226,11 +216,15 @@ export default function App() {
     window.open(`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(hubName + ', Bengaluru')}`, '_blank');
   };
 
-  // Filter bookings for driver based on radius from driver's base hub
+  // WhatsApp Share Function for Shopkeepers
+  const shareOnWhatsApp = (b) => {
+    const text = `🚨 *NAMMA CARGO LOAD ALERT* 🚨\n\n📦 *Cargo:* ${b.cargo_type} (${b.weight_kg} kg)\n📍 *Pickup:* ${b.pickup_hub}\n🎯 *Drop:* ${b.drop_hub}\n💰 *Fare:* ₹${b.agreed_fare || b.offered_fare}\n🚛 *Vehicle:* ${b.vehicle_category} Needed\n\nAccept instantly on NammaCargo App!`;
+    window.open(`https://api.whatsapp.com/send?text=${encodeURIComponent(text)}`, '_blank');
+  };
+
   const filteredDriverBookings = bookings.filter((b) => {
-    if (b.status !== 'broadcasting') return true; // Show accepted/active trips
-    const dist = calculateDistanceKm(driverBaseHub, b.pickup_hub);
-    return dist <= radiusFilterKm;
+    if (b.status !== 'broadcasting') return true;
+    return calculateDistanceKm(driverBaseHub, b.pickup_hub) <= radiusFilterKm;
   });
 
   return (
@@ -246,12 +240,12 @@ export default function App() {
                 <h1 className="text-xl font-black tracking-tight text-white">
                   NAMMA<span className="text-amber-400">CARGO</span>
                 </h1>
-                <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 flex items-center gap-1 font-semibold">
+                <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/25 text-emerald-300 border border-emerald-500/40 flex items-center gap-1 font-semibold">
                   <Radio className="w-3 h-3 animate-pulse" />
-                  {cloudConnected ? 'LIVE CLOUD + POSTGIS RADIUS' : 'SYNCING...'}
+                  {cloudConnected ? 'LIVE CLOUD + WHATSAPP SHARE' : 'SYNCING...'}
                 </span>
               </div>
-              <p className="text-xs text-slate-400">Bengaluru Freight Network • Geospatial Matching Active</p>
+              <p className="text-xs text-slate-400">Bengaluru Freight Network • WhatsApp Driver Broadcast Enabled</p>
             </div>
           </div>
 
@@ -424,9 +418,18 @@ export default function App() {
                         </span>
                         <span className="font-bold text-white text-sm">{b.cargo_type}</span>
                       </div>
-                      <span className="text-xs font-bold px-2.5 py-1 rounded-full uppercase bg-amber-500/20 text-amber-300">
-                        {b.status.replace('_', ' ')}
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => shareOnWhatsApp(b)}
+                          className="bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1 rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer shadow"
+                          title="Share to WhatsApp groups"
+                        >
+                          <Share2 className="w-3.5 h-3.5" /> WhatsApp
+                        </button>
+                        <span className="text-xs font-bold px-2.5 py-1 rounded-full uppercase bg-amber-500/20 text-amber-300">
+                          {b.status.replace('_', ' ')}
+                        </span>
+                      </div>
                     </div>
 
                     <div className="grid grid-cols-2 gap-3 text-xs">
