@@ -3,7 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { QRCodeSVG } from 'qrcode.react';
 import {
   Truck, Package, Navigation,
-  Clock, Sparkles, Radio, MapPin, Share2, LogOut, ShieldCheck, CheckCircle
+  Clock, Sparkles, Radio, MapPin, Share2, LogOut, ShieldCheck, CheckCircle, AlertTriangle
 } from 'lucide-react';
 
 // ============================================================================
@@ -61,9 +61,16 @@ export default function App() {
 
   // KYC Verification State
   const [isKycDone, setIsKycDone] = useState(localStorage.getItem('namma_kyc_done') === 'true');
-  const [driverNameInput, setDriverNameInput] = useState('Raju Gowda');
+  const [driverNameInput, setDriverNameInput] = useState(localStorage.getItem('namma_driver_name') || 'Raju Gowda');
   const [dlNumber, setDlNumber] = useState('KA0320230019284');
-  const [rcNumber, setRcNumber] = useState('KA-53-C-4821');
+  const [rcNumber, setRcNumber] = useState(localStorage.getItem('namma_driver_rc') || 'KA-53-C-4821');
+  const [verifiedVehicleModel, setVerifiedVehicleModel] = useState(
+    localStorage.getItem('namma_vehicle_model') || 'Piaggio Ape Xtra LDX (3W Goods)'
+  );
+  const [verifiedRtoOffice, setVerifiedRtoOffice] = useState(
+    localStorage.getItem('namma_rto_office') || 'KA-53 KR Puram RTO'
+  );
+  const [kycError, setKycError] = useState('');
 
   const [mode, setMode] = useState('customer');
   const [cloudConnected, setCloudConnected] = useState(false);
@@ -143,7 +150,7 @@ export default function App() {
       return;
     }
     setOtpSent(true);
-    setStatusMessage('OTP sent successfully (Simulated Code: 1234)');
+    setStatusMessage('OTP sent! Use test code: 1234');
     setTimeout(() => setStatusMessage(''), 4000);
   };
 
@@ -159,14 +166,16 @@ export default function App() {
     setTimeout(() => setStatusMessage(''), 3000);
   };
 
-const handleCompleteKyc = async (e) => {
+  const handleCompleteKyc = async (e) => {
     e.preventDefault();
+    setKycError('');
+
     if (!dlNumber || !rcNumber) {
-      alert('Please enter both Driving License and Vehicle RC details.');
+      setKycError('Please enter both Driving License and Vehicle RC details.');
       return;
     }
 
-    setStatusMessage('Verifying RC & DL with Supabase RTO Registry...');
+    setStatusMessage('Querying Supabase RTO Master Registry...');
 
     const { data, error } = await supabase.rpc('verify_karnataka_rto', {
       p_phone: userSession,
@@ -176,31 +185,47 @@ const handleCompleteKyc = async (e) => {
     });
 
     if (error) {
-      alert('Database connection error: ' + error.message);
+      setKycError('Database Error: ' + error.message);
       setStatusMessage('');
       return;
     }
 
     if (!data?.valid) {
-      alert(data?.error || 'RTO Verification Failed!');
+      setKycError(data?.error || 'RTO Verification Failed!');
       setStatusMessage('');
       return;
     }
 
+    // Save Official Registry Match Details
     localStorage.setItem('namma_kyc_done', 'true');
+    localStorage.setItem('namma_driver_name', data.owner_name);
+    localStorage.setItem('namma_driver_rc', data.rc_number);
+    localStorage.setItem('namma_vehicle_model', data.vehicle_model);
+    localStorage.setItem('namma_rto_office', data.rto_office);
+
+    setDriverNameInput(data.owner_name);
+    setRcNumber(data.rc_number);
+    setVerifiedVehicleModel(data.vehicle_model);
+    setVerifiedRtoOffice(data.rto_office);
     setIsKycDone(true);
-    setStatusMessage(`RTO Zone ${data.rto_zone} Commercial Permit Verified & Saved to Cloud!`);
-    setTimeout(() => setStatusMessage(''), 4000);
+
+    setStatusMessage(`Verified: ${data.vehicle_model} (${data.rto_office})`);
+    setTimeout(() => setStatusMessage(''), 5000);
   };
 
   const handleLogout = () => {
     localStorage.removeItem('namma_user_phone');
     localStorage.removeItem('namma_kyc_done');
+    localStorage.removeItem('namma_driver_name');
+    localStorage.removeItem('namma_driver_rc');
+    localStorage.removeItem('namma_vehicle_model');
+    localStorage.removeItem('namma_rto_office');
     setUserSession(null);
     setIsKycDone(false);
     setPhone('');
     setOtpSent(false);
     setOtpCode('');
+    setKycError('');
   };
 
   const handleBroadcastLoad = async (e) => {
@@ -231,6 +256,8 @@ const handleCompleteKyc = async (e) => {
       setStatusMessage('Load broadcasted live to Bengaluru fleet partners!');
       setTimeout(() => setStatusMessage(''), 4000);
       fetchLiveCloudData();
+    } else {
+      alert('Broadcast error: ' + error.message);
     }
   };
 
@@ -239,7 +266,7 @@ const handleCompleteKyc = async (e) => {
       status: 'accepted',
       agreed_fare: booking.offered_fare,
       driver_name: driverNameInput,
-      driver_vehicle: `${rcNumber} (Verified Commercial)`,
+      driver_vehicle: `${rcNumber} • ${verifiedVehicleModel}`,
       driver_upi: `${driverNameInput.toLowerCase().replace(/\s+/g, '')}@ybl`
     }).eq('id', booking.id);
     fetchLiveCloudData();
@@ -251,7 +278,7 @@ const handleCompleteKyc = async (e) => {
     await supabase.from('bids').insert([{
       booking_id: bookingId,
       driver_name: driverNameInput,
-      vehicle_number: `${rcNumber} (RTO Verified)`,
+      vehicle_number: `${rcNumber} (${verifiedVehicleModel})`,
       driver_upi: `${driverNameInput.toLowerCase().replace(/\s+/g, '')}@ybl`,
       bid_amount: amount
     }]);
@@ -358,7 +385,7 @@ const handleCompleteKyc = async (e) => {
                 </button>
               </div>
               <div>
-                <label className="text-xs text-slate-400 block mb-1">Enter 4-Digit OTP (Hint: 1234)</label>
+                <label className="text-xs text-slate-400 block mb-1">Enter 4-Digit OTP (Test Code: 1234)</label>
                 <input
                   type="text"
                   maxLength={4}
@@ -377,43 +404,40 @@ const handleCompleteKyc = async (e) => {
               </button>
             </form>
           )}
-
-          <div className="border-t border-slate-800 pt-4 text-center text-[11px] text-slate-500 flex items-center justify-center gap-1">
-            <ShieldCheck className="w-4 h-4 text-emerald-400" /> Secure Supabase Cloud Session Active
-          </div>
         </div>
       </div>
     );
   }
 
   // ============================================================================
-  // 2. RENDER DRIVER KYC SCREEN (IF LOGGED IN BUT NOT YET VERIFIED)
+  // 2. RENDER DRIVER KYC SCREEN (VERIFIES AGAINST SUPABASE RTO REGISTRY)
   // ============================================================================
   if (!isKycDone) {
     return (
       <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-4">
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 max-w-md w-full shadow-2xl space-y-6">
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-7 max-w-lg w-full shadow-2xl space-y-5">
           <div className="flex justify-between items-center border-b border-slate-800 pb-4">
             <div>
               <h2 className="text-lg font-bold text-white flex items-center gap-2">
-                <ShieldCheck className="w-5 h-5 text-emerald-400" /> Karnataka RTO KYC
+                <ShieldCheck className="w-5 h-5 text-emerald-400" /> Karnataka RTO Registry Check
               </h2>
-              <p className="text-xs text-slate-400">Required for commercial freight compliance</p>
+              <p className="text-xs text-slate-400">Checks Yellow-Board Permit & Fitness Certificate in Cloud Registry</p>
             </div>
             <button onClick={handleLogout} className="text-rose-400 hover:text-rose-300 text-xs font-semibold cursor-pointer">
               Logout
             </button>
           </div>
 
-          {statusMessage && (
-            <div className="bg-emerald-500/20 border border-emerald-500 text-emerald-200 p-3 rounded-xl text-xs text-center font-medium">
-              {statusMessage}
+          {kycError && (
+            <div className="bg-rose-500/20 border border-rose-500 text-rose-200 p-3.5 rounded-xl text-xs font-medium flex items-start gap-2.5">
+              <AlertTriangle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
+              <span>{kycError}</span>
             </div>
           )}
 
           <form onSubmit={handleCompleteKyc} className="space-y-4">
             <div>
-              <label className="text-xs text-slate-400 block mb-1">Full Name (As per Driving License)</label>
+              <label className="text-xs text-slate-400 block mb-1">Driver / Operator Name</label>
               <input
                 type="text"
                 value={driverNameInput}
@@ -424,7 +448,7 @@ const handleCompleteKyc = async (e) => {
             </div>
 
             <div>
-              <label className="text-xs text-slate-400 block mb-1">Driving License (DL) Number</label>
+              <label className="text-xs text-slate-400 block mb-1">Sarathi Driving License (DL) Number</label>
               <input
                 type="text"
                 value={dlNumber}
@@ -436,7 +460,7 @@ const handleCompleteKyc = async (e) => {
             </div>
 
             <div>
-              <label className="text-xs text-emerald-400 block mb-1">Commercial Vehicle RC (Yellow Board)</label>
+              <label className="text-xs text-emerald-400 block mb-1">Commercial Vehicle RC Number</label>
               <input
                 type="text"
                 value={rcNumber}
@@ -445,14 +469,50 @@ const handleCompleteKyc = async (e) => {
                 className="w-full bg-slate-950 border border-emerald-500/50 rounded-xl px-3 py-2 text-sm text-emerald-300 uppercase font-mono font-bold"
                 required
               />
-              <span className="text-[10px] text-slate-500 mt-1 block">Must have valid Karnataka commercial permit (KA-01 to KA-53)</span>
+            </div>
+
+            {/* Interactive Registry Test Presets */}
+            <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 space-y-2">
+              <span className="text-[11px] text-slate-400 font-bold block">
+                Click any test RC below to test your live Supabase RTO Database rules:
+              </span>
+              <div className="grid grid-cols-2 gap-2 text-[11px]">
+                <button
+                  type="button"
+                  onClick={() => { setRcNumber('KA-53-C-4821'); setKycError(''); }}
+                  className="bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 px-2.5 py-1.5 rounded-lg text-left cursor-pointer hover:bg-emerald-500/25"
+                >
+                  ✅ <b>KA-53-C-4821</b> (Valid 3W Yellow Board)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setRcNumber('KA-04-AB-9012'); setKycError(''); }}
+                  className="bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 px-2.5 py-1.5 rounded-lg text-left cursor-pointer hover:bg-emerald-500/25"
+                >
+                  ✅ <b>KA-04-AB-9012</b> (Valid 4W Tata Ace)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setRcNumber('KA-01-MP-1122'); setKycError(''); }}
+                  className="bg-rose-500/15 border border-rose-500/40 text-rose-300 px-2.5 py-1.5 rounded-lg text-left cursor-pointer hover:bg-rose-500/25"
+                >
+                  ❌ <b>KA-01-MP-1122</b> (Private White-Board Car)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setRcNumber('KA-02-C-3344'); setKycError(''); }}
+                  className="bg-amber-500/15 border border-amber-500/40 text-amber-300 px-2.5 py-1.5 rounded-lg text-left cursor-pointer hover:bg-amber-500/25"
+                >
+                  ⚠️ <b>KA-02-C-3344</b> (Expired Fitness / FC)
+                </button>
+              </div>
             </div>
 
             <button
               type="submit"
               className="w-full bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black py-3 rounded-xl shadow transition text-sm cursor-pointer flex items-center justify-center gap-2"
             >
-              <CheckCircle className="w-4 h-4" /> Verify RTO Documents
+              <CheckCircle className="w-4 h-4" /> Verify Against RTO Master Registry
             </button>
           </form>
         </div>
@@ -461,7 +521,7 @@ const handleCompleteKyc = async (e) => {
   }
 
   // ============================================================================
-  // 3. MAIN APP INTERFACE (WHEN AUTHENTICATED & KYC VERIFIED)
+  // 3. MAIN APP INTERFACE (WHEN AUTHENTICATED & RTO REGISTRY VERIFIED)
   // ============================================================================
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 font-sans pb-16">
@@ -478,10 +538,12 @@ const handleCompleteKyc = async (e) => {
                 </h1>
                 <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/25 text-emerald-300 border border-emerald-500/40 flex items-center gap-1 font-semibold">
                   <Radio className="w-3 h-3 animate-pulse" />
-                  {cloudConnected ? 'RTO VERIFIED + LIVE CLOUD' : 'SYNCING...'}
+                  {cloudConnected ? 'RTO REGISTRY VERIFIED' : 'SYNCING...'}
                 </span>
               </div>
-              <p className="text-xs text-slate-400">Partner: {driverNameInput} ({rcNumber})</p>
+              <p className="text-xs text-slate-400">
+                {driverNameInput} • {rcNumber} ({verifiedVehicleModel})
+              </p>
             </div>
           </div>
 
@@ -508,7 +570,7 @@ const handleCompleteKyc = async (e) => {
             <button
               onClick={handleLogout}
               className="bg-slate-800 hover:bg-slate-700 text-rose-400 p-2 rounded-xl border border-slate-700 text-xs font-bold flex items-center gap-1 cursor-pointer"
-              title="Logout"
+              title="Logout & Test Another RC"
             >
               <LogOut className="w-4 h-4" />
             </button>
@@ -667,7 +729,6 @@ const handleCompleteKyc = async (e) => {
                         <button
                           onClick={() => shareOnWhatsApp(b)}
                           className="bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1 rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer shadow"
-                          title="Share to WhatsApp groups"
                         >
                           <Share2 className="w-3.5 h-3.5" /> WhatsApp
                         </button>
@@ -726,6 +787,7 @@ const handleCompleteKyc = async (e) => {
                       <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 flex items-center justify-between">
                         <div className="text-xs">
                           <span className="text-emerald-400 font-bold">Delivered by {b.driver_name}</span>
+                          <div className="text-slate-400">{b.driver_vehicle}</div>
                           <div className="text-slate-400">UPI: {b.driver_upi}</div>
                         </div>
                         <div className="bg-white p-2 rounded-xl">
@@ -744,9 +806,6 @@ const handleCompleteKyc = async (e) => {
               <h2 className="text-base font-bold text-white flex items-center gap-2">
                 <MapPin className="w-5 h-5 text-emerald-400" /> Driver Location & Radius
               </h2>
-              <p className="text-xs text-slate-400">
-                Select your current hub in Bengaluru. The PostGIS radius filter will only show loads originating near you.
-              </p>
 
               <div className="space-y-3">
                 <div>
@@ -777,12 +836,13 @@ const handleCompleteKyc = async (e) => {
                   />
                 </div>
 
-                <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 text-xs space-y-1">
-                  <span className="text-emerald-400 font-bold block flex items-center gap-1">
-                    <ShieldCheck className="w-4 h-4" /> KYC Status: Verified
+                <div className="bg-slate-950 p-3.5 rounded-xl border border-emerald-500/30 text-xs space-y-1.5">
+                  <span className="text-emerald-400 font-bold flex items-center gap-1">
+                    <ShieldCheck className="w-4 h-4" /> Official RTO Registry Match
                   </span>
-                  <span className="text-slate-300 block">RC: {rcNumber}</span>
-                  <span className="text-slate-300 block">DL: {dlNumber}</span>
+                  <span className="text-slate-200 block font-semibold">{verifiedVehicleModel}</span>
+                  <span className="text-slate-400 block">RC: {rcNumber} ({verifiedRtoOffice})</span>
+                  <span className="text-slate-400 block">DL: {dlNumber}</span>
                 </div>
               </div>
             </div>
