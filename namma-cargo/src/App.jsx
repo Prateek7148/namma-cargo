@@ -9,12 +9,8 @@ import {
 // ============================================================================
 // 1. SUPABASE LIVE CLOUD CONNECTION
 // ============================================================================
-const SUPABASE_URL =
-  import.meta.env.VITE_SUPABASE_URL || 'https://jfzxpwtuvflnmwjnhdph.supabase.co';
-const SUPABASE_KEY =
-  import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY ||
-  import.meta.env.VITE_SUPABASE_ANON_KEY ||
-  'sb_publishable_8FQR2H08lxEArRynnpiXOg_W9iLlm9a';
+const SUPABASE_URL = 'https://jfzxpwtuvflnmwjnhdph.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_8FQR2H08lxEArRynnpiXOg_W9iLlm9a';
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
@@ -216,7 +212,6 @@ export default function App() {
     window.open(`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(hubName + ', Bengaluru')}`, '_blank');
   };
 
-  // WhatsApp Share Function for Shopkeepers
   const shareOnWhatsApp = (b) => {
     const text = `🚨 *NAMMA CARGO LOAD ALERT* 🚨\n\n📦 *Cargo:* ${b.cargo_type} (${b.weight_kg} kg)\n📍 *Pickup:* ${b.pickup_hub}\n🎯 *Drop:* ${b.drop_hub}\n💰 *Fare:* ₹${b.agreed_fare || b.offered_fare}\n🚛 *Vehicle:* ${b.vehicle_category} Needed\n\nAccept instantly on NammaCargo App!`;
     window.open(`https://api.whatsapp.com/send?text=${encodeURIComponent(text)}`, '_blank');
