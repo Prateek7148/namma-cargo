@@ -3,7 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { QRCodeSVG } from 'qrcode.react';
 import {
   Truck, Package, Navigation,
-  Clock, CheckCircle2, Sparkles, Radio, MapPin, Share2, Phone, LogOut, ShieldCheck
+  Clock, Sparkles, Radio, MapPin, Share2, LogOut, ShieldCheck, CheckCircle
 } from 'lucide-react';
 
 // ============================================================================
@@ -59,6 +59,12 @@ export default function App() {
   const [otpCode, setOtpCode] = useState('');
   const [userSession, setUserSession] = useState(localStorage.getItem('namma_user_phone') || null);
 
+  // KYC Verification State
+  const [isKycDone, setIsKycDone] = useState(localStorage.getItem('namma_kyc_done') === 'true');
+  const [driverNameInput, setDriverNameInput] = useState('Raju Gowda');
+  const [dlNumber, setDlNumber] = useState('KA0320230019284');
+  const [rcNumber, setRcNumber] = useState('KA-53-C-4821');
+
   const [mode, setMode] = useState('customer');
   const [cloudConnected, setCloudConnected] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -77,9 +83,6 @@ export default function App() {
   const [ewayBill, setEwayBill] = useState('');
 
   // Driver State & Geospatial Radius Filter
-  const [driverName, setDriverName] = useState('Raju Gowda');
-  const [driverVehicle, setDriverVehicle] = useState('KA-53-C-4821 (3W Ape Cargo)');
-  const [driverUpi, setDriverUpi] = useState('rajugowda@ybl');
   const [driverBaseHub, setDriverBaseHub] = useState(BENGALURU_HUBS[3].name);
   const [radiusFilterKm, setRadiusFilterKm] = useState(25);
   const [bidInputs, setBidInputs] = useState({});
@@ -152,13 +155,49 @@ export default function App() {
     }
     localStorage.setItem('namma_user_phone', phone);
     setUserSession(phone);
-    setStatusMessage('Phone verified successfully! Welcome to NammaCargo.');
+    setStatusMessage('Phone verified successfully!');
     setTimeout(() => setStatusMessage(''), 3000);
+  };
+
+const handleCompleteKyc = async (e) => {
+    e.preventDefault();
+    if (!dlNumber || !rcNumber) {
+      alert('Please enter both Driving License and Vehicle RC details.');
+      return;
+    }
+
+    setStatusMessage('Verifying RC & DL with Supabase RTO Registry...');
+
+    const { data, error } = await supabase.rpc('verify_karnataka_rto', {
+      p_phone: userSession,
+      p_name: driverNameInput,
+      p_dl: dlNumber,
+      p_rc: rcNumber
+    });
+
+    if (error) {
+      alert('Database connection error: ' + error.message);
+      setStatusMessage('');
+      return;
+    }
+
+    if (!data?.valid) {
+      alert(data?.error || 'RTO Verification Failed!');
+      setStatusMessage('');
+      return;
+    }
+
+    localStorage.setItem('namma_kyc_done', 'true');
+    setIsKycDone(true);
+    setStatusMessage(`RTO Zone ${data.rto_zone} Commercial Permit Verified & Saved to Cloud!`);
+    setTimeout(() => setStatusMessage(''), 4000);
   };
 
   const handleLogout = () => {
     localStorage.removeItem('namma_user_phone');
+    localStorage.removeItem('namma_kyc_done');
     setUserSession(null);
+    setIsKycDone(false);
     setPhone('');
     setOtpSent(false);
     setOtpCode('');
@@ -199,9 +238,9 @@ export default function App() {
     await supabase.from('bookings').update({
       status: 'accepted',
       agreed_fare: booking.offered_fare,
-      driver_name: driverName,
-      driver_vehicle: driverVehicle,
-      driver_upi: driverUpi
+      driver_name: driverNameInput,
+      driver_vehicle: `${rcNumber} (Verified Commercial)`,
+      driver_upi: `${driverNameInput.toLowerCase().replace(/\s+/g, '')}@ybl`
     }).eq('id', booking.id);
     fetchLiveCloudData();
   };
@@ -211,9 +250,9 @@ export default function App() {
     if (!amount) return;
     await supabase.from('bids').insert([{
       booking_id: bookingId,
-      driver_name: driverName,
-      vehicle_number: driverVehicle,
-      driver_upi: driverUpi,
+      driver_name: driverNameInput,
+      vehicle_number: `${rcNumber} (RTO Verified)`,
+      driver_upi: `${driverNameInput.toLowerCase().replace(/\s+/g, '')}@ybl`,
       bid_amount: amount
     }]);
     setBidInputs({ ...bidInputs, [bookingId]: '' });
@@ -260,7 +299,7 @@ export default function App() {
   });
 
   // ============================================================================
-  // RENDER LOGIN SCREEN IF NOT AUTHENTICATED
+  // 1. RENDER LOGIN SCREEN
   // ============================================================================
   if (!userSession) {
     return (
@@ -348,7 +387,81 @@ export default function App() {
   }
 
   // ============================================================================
-  // MAIN APP INTERFACE (WHEN LOGGED IN)
+  // 2. RENDER DRIVER KYC SCREEN (IF LOGGED IN BUT NOT YET VERIFIED)
+  // ============================================================================
+  if (!isKycDone) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-4">
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 max-w-md w-full shadow-2xl space-y-6">
+          <div className="flex justify-between items-center border-b border-slate-800 pb-4">
+            <div>
+              <h2 className="text-lg font-bold text-white flex items-center gap-2">
+                <ShieldCheck className="w-5 h-5 text-emerald-400" /> Karnataka RTO KYC
+              </h2>
+              <p className="text-xs text-slate-400">Required for commercial freight compliance</p>
+            </div>
+            <button onClick={handleLogout} className="text-rose-400 hover:text-rose-300 text-xs font-semibold cursor-pointer">
+              Logout
+            </button>
+          </div>
+
+          {statusMessage && (
+            <div className="bg-emerald-500/20 border border-emerald-500 text-emerald-200 p-3 rounded-xl text-xs text-center font-medium">
+              {statusMessage}
+            </div>
+          )}
+
+          <form onSubmit={handleCompleteKyc} className="space-y-4">
+            <div>
+              <label className="text-xs text-slate-400 block mb-1">Full Name (As per Driving License)</label>
+              <input
+                type="text"
+                value={driverNameInput}
+                onChange={(e) => setDriverNameInput(e.target.value)}
+                className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="text-xs text-slate-400 block mb-1">Driving License (DL) Number</label>
+              <input
+                type="text"
+                value={dlNumber}
+                onChange={(e) => setDlNumber(e.target.value)}
+                placeholder="KA0320230019284"
+                className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white uppercase font-mono"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="text-xs text-emerald-400 block mb-1">Commercial Vehicle RC (Yellow Board)</label>
+              <input
+                type="text"
+                value={rcNumber}
+                onChange={(e) => setRcNumber(e.target.value)}
+                placeholder="KA-53-C-4821"
+                className="w-full bg-slate-950 border border-emerald-500/50 rounded-xl px-3 py-2 text-sm text-emerald-300 uppercase font-mono font-bold"
+                required
+              />
+              <span className="text-[10px] text-slate-500 mt-1 block">Must have valid Karnataka commercial permit (KA-01 to KA-53)</span>
+            </div>
+
+            <button
+              type="submit"
+              className="w-full bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black py-3 rounded-xl shadow transition text-sm cursor-pointer flex items-center justify-center gap-2"
+            >
+              <CheckCircle className="w-4 h-4" /> Verify RTO Documents
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
+  // ============================================================================
+  // 3. MAIN APP INTERFACE (WHEN AUTHENTICATED & KYC VERIFIED)
   // ============================================================================
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 font-sans pb-16">
@@ -365,10 +478,10 @@ export default function App() {
                 </h1>
                 <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/25 text-emerald-300 border border-emerald-500/40 flex items-center gap-1 font-semibold">
                   <Radio className="w-3 h-3 animate-pulse" />
-                  {cloudConnected ? 'LIVE CLOUD + AUTH ACTIVE' : 'SYNCING...'}
+                  {cloudConnected ? 'RTO VERIFIED + LIVE CLOUD' : 'SYNCING...'}
                 </span>
               </div>
-              <p className="text-xs text-slate-400">Verified User: +91 {userSession}</p>
+              <p className="text-xs text-slate-400">Partner: {driverNameInput} ({rcNumber})</p>
             </div>
           </div>
 
@@ -664,14 +777,12 @@ export default function App() {
                   />
                 </div>
 
-                <div>
-                  <label className="text-xs text-slate-400 block mb-1">Driver UPI ID for Payouts</label>
-                  <input
-                    type="text"
-                    value={driverUpi}
-                    onChange={(e) => setDriverUpi(e.target.value)}
-                    className="w-full bg-slate-950 border border-emerald-500/50 rounded-lg px-3 py-2 text-xs text-emerald-300 font-mono"
-                  />
+                <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 text-xs space-y-1">
+                  <span className="text-emerald-400 font-bold block flex items-center gap-1">
+                    <ShieldCheck className="w-4 h-4" /> KYC Status: Verified
+                  </span>
+                  <span className="text-slate-300 block">RC: {rcNumber}</span>
+                  <span className="text-slate-300 block">DL: {dlNumber}</span>
                 </div>
               </div>
             </div>
@@ -692,7 +803,7 @@ export default function App() {
 
               {filteredDriverBookings.map((b) => {
                 const distFromDriver = calculateDistanceKm(driverBaseHub, b.pickup_hub);
-                const upiUri = `upi://pay?pa=${b.driver_upi || driverUpi}&pn=${encodeURIComponent(driverName)}&am=${b.agreed_fare || b.offered_fare}&cu=INR`;
+                const upiUri = `upi://pay?pa=${driverNameInput.toLowerCase().replace(/\s+/g, '')}@ybl&pn=${encodeURIComponent(driverNameInput)}&am=${b.agreed_fare || b.offered_fare}&cu=INR`;
 
                 return (
                   <div key={b.id} className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4 shadow-lg">
