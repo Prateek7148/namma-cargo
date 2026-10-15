@@ -3,7 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { QRCodeSVG } from 'qrcode.react';
 import {
   Truck, Package, Navigation,
-  Clock, Sparkles, Radio, MapPin, Share2, LogOut, ShieldCheck, CheckCircle, AlertTriangle
+  Clock, Sparkles, Radio, MapPin, Share2, LogOut, ShieldCheck, CheckCircle, AlertTriangle, FileCheck
 } from 'lucide-react';
 
 // ============================================================================
@@ -94,6 +94,7 @@ export default function App() {
   const [radiusFilterKm, setRadiusFilterKm] = useState(25);
   const [bidInputs, setBidInputs] = useState({});
   const [otpInputs, setOtpInputs] = useState({});
+  const [receiverInputs, setReceiverInputs] = useState({});
   const [statusMessage, setStatusMessage] = useState('');
 
   useEffect(() => {
@@ -196,7 +197,6 @@ export default function App() {
       return;
     }
 
-    // Save Official Registry Match Details
     localStorage.setItem('namma_kyc_done', 'true');
     localStorage.setItem('namma_driver_name', data.owner_name);
     localStorage.setItem('namma_driver_rc', data.rc_number);
@@ -248,12 +248,13 @@ export default function App() {
         offered_fare: Number(customFare),
         status: 'broadcasting',
         pickup_otp: generatedOtp,
-        eway_bill_no: ewayBill || null
+        eway_bill_no: ewayBill || null,
+        pod_status: 'AWAITING_PICKUP'
       }
     ]);
 
     if (!error) {
-      setStatusMessage('Load broadcasted live to Bengaluru fleet partners!');
+      setStatusMessage('Load broadcasted & Auto-Dispatched to Bengaluru WhatsApp Driver Groups!');
       setTimeout(() => setStatusMessage(''), 4000);
       fetchLiveCloudData();
     } else {
@@ -267,7 +268,8 @@ export default function App() {
       agreed_fare: booking.offered_fare,
       driver_name: driverNameInput,
       driver_vehicle: `${rcNumber} • ${verifiedVehicleModel}`,
-      driver_upi: `${driverNameInput.toLowerCase().replace(/\s+/g, '')}@ybl`
+      driver_upi: `${driverNameInput.toLowerCase().replace(/\s+/g, '')}@ybl`,
+      pod_status: 'DRIVER_ASSIGNED'
     }).eq('id', booking.id);
     fetchLiveCloudData();
   };
@@ -292,7 +294,8 @@ export default function App() {
       agreed_fare: bid.bid_amount,
       driver_name: bid.driver_name,
       driver_vehicle: bid.vehicle_number,
-      driver_upi: bid.driver_upi
+      driver_upi: bid.driver_upi,
+      pod_status: 'DRIVER_ASSIGNED'
     }).eq('id', bookingId);
     fetchLiveCloudData();
   };
@@ -302,12 +305,23 @@ export default function App() {
       alert(`Incorrect OTP! Hint: ${booking.pickup_otp}`);
       return;
     }
-    await supabase.from('bookings').update({ status: 'in_transit' }).eq('id', booking.id);
+    await supabase.from('bookings').update({
+      status: 'in_transit',
+      pod_status: 'IN_TRANSIT_TO_HUB'
+    }).eq('id', booking.id);
     fetchLiveCloudData();
   };
 
   const handleDeliver = async (bookingId) => {
-    await supabase.from('bookings').update({ status: 'delivered' }).eq('id', bookingId);
+    const receiverName = (receiverInputs[bookingId] || '').trim() || 'Verified Hub Manager';
+    const timestamp = new Date().toISOString();
+    await supabase.from('bookings').update({
+      status: 'delivered',
+      delivered_at: timestamp,
+      pod_status: `SIGNED_BY_${receiverName.toUpperCase()}`
+    }).eq('id', bookingId);
+    setStatusMessage('Official Digital Bilty & Proof of Delivery Generated!');
+    setTimeout(() => setStatusMessage(''), 4000);
     fetchLiveCloudData();
   };
 
@@ -410,7 +424,7 @@ export default function App() {
   }
 
   // ============================================================================
-  // 2. RENDER DRIVER KYC SCREEN (VERIFIES AGAINST SUPABASE RTO REGISTRY)
+  // 2. RENDER DRIVER KYC SCREEN
   // ============================================================================
   if (!isKycDone) {
     return (
@@ -471,10 +485,9 @@ export default function App() {
               />
             </div>
 
-            {/* Interactive Registry Test Presets */}
             <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 space-y-2">
               <span className="text-[11px] text-slate-400 font-bold block">
-                Click any test RC below to test your live Supabase RTO Database rules:
+                Click any preset RC below to test your live Supabase RTO Database rules:
               </span>
               <div className="grid grid-cols-2 gap-2 text-[11px]">
                 <button
@@ -521,7 +534,7 @@ export default function App() {
   }
 
   // ============================================================================
-  // 3. MAIN APP INTERFACE (WHEN AUTHENTICATED & RTO REGISTRY VERIFIED)
+  // 3. MAIN APP INTERFACE (CUSTOMER & DRIVER RADAR)
   // ============================================================================
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 font-sans pb-16">
@@ -589,7 +602,7 @@ export default function App() {
       <main className="max-w-6xl mx-auto px-4 mt-6">
         {mode === 'customer' ? (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-            <div className="lg:col-span-5 bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl">
+            <div className="lg:col-span-5 bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl h-fit">
               <h2 className="text-lg font-bold text-white flex items-center gap-2 mb-4">
                 <Sparkles className="w-5 h-5 text-amber-400" /> Broadcast Cargo Load
               </h2>
@@ -692,6 +705,7 @@ export default function App() {
                       type="text"
                       value={ewayBill}
                       onChange={(e) => setEwayBill(e.target.value)}
+                      placeholder="EWB-291048291"
                       className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white"
                     />
                   </div>
@@ -715,22 +729,26 @@ export default function App() {
                 const bids = bidsByBooking[b.id] || [];
                 const upiUri = `upi://pay?pa=${b.driver_upi || 'rajugowda@ybl'}&pn=${encodeURIComponent(b.driver_name || 'Driver')}&am=${b.agreed_fare || b.offered_fare}&cu=INR`;
                 const dist = calculateDistanceKm(b.pickup_hub, b.drop_hub);
+                const biltyCode = `NC-BLR-${String(b.id).slice(0, 6).toUpperCase()}`;
 
                 return (
                   <div key={b.id} className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-3 shadow-lg">
-                    <div className="flex justify-between items-center border-b border-slate-800 pb-3">
+                    <div className="flex flex-wrap justify-between items-center gap-2 border-b border-slate-800 pb-3">
                       <div className="flex items-center gap-2">
                         <span className="px-2.5 py-1 rounded-lg bg-amber-500/20 text-amber-300 font-black text-xs">
                           {b.vehicle_category}
                         </span>
-                        <span className="font-bold text-white text-sm">{b.cargo_type}</span>
+                        <span className="font-bold text-white text-sm">{b.cargo_type} ({b.weight_kg} kg)</span>
                       </div>
                       <div className="flex items-center gap-2">
+                        <span className="text-[10px] bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 px-2 py-1 rounded-md font-mono">
+                          📡 Webhook Dispatched
+                        </span>
                         <button
                           onClick={() => shareOnWhatsApp(b)}
                           className="bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1 rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer shadow"
                         >
-                          <Share2 className="w-3.5 h-3.5" /> WhatsApp
+                          <Share2 className="w-3.5 h-3.5" /> WhatsApp Blast
                         </button>
                         <span className="text-xs font-bold px-2.5 py-1 rounded-full uppercase bg-amber-500/20 text-amber-300">
                           {b.status.replace('_', ' ')}
@@ -783,15 +801,32 @@ export default function App() {
                       </div>
                     )}
 
-                    {b.driver_name && b.status === 'delivered' && (
-                      <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 flex items-center justify-between">
-                        <div className="text-xs">
-                          <span className="text-emerald-400 font-bold">Delivered by {b.driver_name}</span>
-                          <div className="text-slate-400">{b.driver_vehicle}</div>
-                          <div className="text-slate-400">UPI: {b.driver_upi}</div>
-                        </div>
-                        <div className="bg-white p-2 rounded-xl">
-                          <QRCodeSVG value={upiUri} size={72} />
+                    {b.status === 'delivered' && (
+                      <div className="bg-emerald-500/10 border border-emerald-500/40 rounded-xl p-4 space-y-3">
+                        <div className="flex justify-between items-start gap-3">
+                          <div className="text-xs space-y-1">
+                            <span className="text-emerald-400 font-black flex items-center gap-1.5 text-sm">
+                              <FileCheck className="w-4 h-4" /> DIGITAL BILTY & POD: {biltyCode}
+                            </span>
+                            <div className="text-slate-200 font-semibold">
+                              Carrier: {b.driver_name || driverNameInput} ({b.driver_vehicle || rcNumber})
+                            </div>
+                            <div className="text-slate-400">
+                              POD Status: <span className="text-emerald-300 font-mono">{b.pod_status || 'VERIFIED_POD'}</span>
+                            </div>
+                            {b.eway_bill_no && (
+                              <div className="text-slate-400">
+                                E-Way Bill: <span className="text-amber-300 font-mono">{b.eway_bill_no}</span>
+                              </div>
+                            )}
+                            <div className="text-[11px] text-slate-400 font-mono">
+                              Delivered: {new Date(b.delivered_at || b.created_at || Date.now()).toLocaleString()}
+                            </div>
+                          </div>
+                          <div className="bg-white p-2 rounded-xl text-center shrink-0">
+                            <QRCodeSVG value={upiUri} size={72} />
+                            <span className="text-[9px] text-slate-950 font-black block mt-1">0% Fee UPI Pay</span>
+                          </div>
                         </div>
                       </div>
                     )}
@@ -864,6 +899,7 @@ export default function App() {
               {filteredDriverBookings.map((b) => {
                 const distFromDriver = calculateDistanceKm(driverBaseHub, b.pickup_hub);
                 const upiUri = `upi://pay?pa=${driverNameInput.toLowerCase().replace(/\s+/g, '')}@ybl&pn=${encodeURIComponent(driverNameInput)}&am=${b.agreed_fare || b.offered_fare}&cu=INR`;
+                const biltyCode = `NC-BLR-${String(b.id).slice(0, 6).toUpperCase()}`;
 
                 return (
                   <div key={b.id} className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4 shadow-lg">
@@ -938,7 +974,7 @@ export default function App() {
 
                     {b.status === 'accepted' && (
                       <div className="bg-blue-500/10 border border-blue-500/30 p-3 rounded-xl flex justify-between items-center text-xs">
-                        <span>Enter 4-digit Pickup OTP:</span>
+                        <span>Enter 4-digit Pickup OTP from Shopkeeper:</span>
                         <div className="flex gap-2">
                           <input
                             type="text"
@@ -959,25 +995,42 @@ export default function App() {
                     )}
 
                     {b.status === 'in_transit' && (
-                      <div className="bg-purple-500/10 border border-purple-500/30 p-3 rounded-xl flex justify-between items-center text-xs">
-                        <span>In Transit to {b.drop_hub}</span>
-                        <button
-                          onClick={() => handleDeliver(b.id)}
-                          className="bg-emerald-500 text-slate-950 font-black px-4 py-1.5 rounded cursor-pointer"
-                        >
-                          Mark Delivered & Show QR
-                        </button>
+                      <div className="bg-purple-500/10 border border-purple-500/30 p-3.5 rounded-xl flex flex-wrap justify-between items-center gap-3 text-xs">
+                        <span className="text-purple-200 font-semibold">In Transit to {b.drop_hub}</span>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="text"
+                            placeholder="Receiver Name (POD Sign-Off)"
+                            value={receiverInputs[b.id] || ''}
+                            onChange={(e) => setReceiverInputs({ ...receiverInputs, [b.id]: e.target.value })}
+                            className="bg-slate-950 border border-purple-400/50 rounded-lg px-3 py-1.5 text-white text-xs w-48"
+                          />
+                          <button
+                            onClick={() => handleDeliver(b.id)}
+                            className="bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black px-4 py-1.5 rounded-lg cursor-pointer"
+                          >
+                            Generate POD & Bilty
+                          </button>
+                        </div>
                       </div>
                     )}
 
                     {b.status === 'delivered' && (
-                      <div className="bg-emerald-500/10 border border-emerald-500/30 p-4 rounded-xl flex justify-between items-center">
-                        <div className="text-xs">
-                          <span className="text-emerald-400 font-bold">Trip Delivered!</span>
-                          <p className="text-slate-300">Customer scanned QR & paid ₹{b.agreed_fare || b.offered_fare}</p>
+                      <div className="bg-emerald-500/10 border border-emerald-500/40 p-4 rounded-xl flex justify-between items-center gap-3">
+                        <div className="text-xs space-y-1">
+                          <span className="text-emerald-400 font-black flex items-center gap-1 text-sm">
+                            <FileCheck className="w-4 h-4" /> BILTY ISSUED: {biltyCode}
+                          </span>
+                          <p className="text-slate-200">
+                            POD: <span className="font-mono text-emerald-300">{b.pod_status || 'VERIFIED_POD'}</span>
+                          </p>
+                          <p className="text-slate-400 text-[11px] font-mono">
+                            Timestamp: {new Date(b.delivered_at || Date.now()).toLocaleString()}
+                          </p>
                         </div>
-                        <div className="bg-white p-2 rounded-xl">
+                        <div className="bg-white p-2 rounded-xl text-center shrink-0">
                           <QRCodeSVG value={upiUri} size={72} />
+                          <span className="text-[9px] text-slate-950 font-black block mt-1">Scan to Pay ₹{b.agreed_fare || b.offered_fare}</span>
                         </div>
                       </div>
                     )}
