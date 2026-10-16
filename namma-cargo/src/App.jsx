@@ -4,7 +4,7 @@ import { QRCodeSVG } from 'qrcode.react';
 import {
   Truck, Package, Navigation,
   Clock, Sparkles, Radio, MapPin, Share2, LogOut, ShieldCheck, CheckCircle,
-  AlertTriangle, FileCheck, LocateFixed, Repeat, Sliders, ArrowLeftRight, Layers, Shield, PlusCircle
+  AlertTriangle, FileCheck, LocateFixed, Repeat, Sliders, ArrowLeftRight, Layers, Shield, PlusCircle, XCircle, RotateCcw
 } from 'lucide-react';
 
 // ============================================================================
@@ -102,6 +102,10 @@ export default function App() {
   const [bidsByBooking, setBidsByBooking] = useState({});
   const [idleVehicles, setIdleVehicles] = useState([]);
 
+  // Driver Passed / Skipped Loads State (So drivers can reject/hide loads they don't want)
+  const [passedBookingIds, setPassedBookingIds] = useState([]);
+  const [skippedCoLoadIds, setSkippedCoLoadIds] = useState([]);
+
   // Customer State
   const [customerName, setCustomerName] = useState('Prateek Traders & Hardware');
   const [pickupHub, setPickupHub] = useState(BENGALURU_HUBS[0].name);
@@ -114,7 +118,7 @@ export default function App() {
   const [customFare, setCustomFare] = useState(380);
   const [ewayBill, setEwayBill] = useState('');
 
-  // Shared Cargo Pooling (Part-Load) & ₹49 Transit Insurance
+  // Shared Cargo Pooling & Insurance
   const [isSharedLoad, setIsSharedLoad] = useState(true);
   const [selectedPoolGroupId, setSelectedPoolGroupId] = useState(null);
   const [hasInsurance, setHasInsurance] = useState(false);
@@ -397,16 +401,13 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  // ============================================================================
-  // MULTI-ORDER SHARED POOLING ENGINE (CLUBBING ORDERS ON THE SAME CORRIDOR)
-  // ============================================================================
-  // Find existing shared pools on the same Pickup -> Drop corridor that still have deck space left
   const availableCorridorPools = (() => {
     const poolsMap = {};
     bookings.forEach((b) => {
       if (
         b.is_shared_load &&
         b.status !== 'delivered' &&
+        b.status !== 'cancelled' &&
         b.pickup_hub === pickupHub &&
         b.drop_hub === dropHub &&
         b.pool_group_id
@@ -440,12 +441,10 @@ export default function App() {
     const startCoords = getHubCoords(pickupHub);
     const fullCargoLabel = packageUnits ? `${cargoType} (${packageUnits})` : cargoType;
 
-    // Assign either the joined pool ID, or create a brand-new pool group ID if shared load is enabled
     const activePoolId = isSharedLoad
       ? selectedPoolGroupId || `POOL-${pickupHub.slice(0, 3).toUpperCase()}-${Math.floor(100 + Math.random() * 900)}`
       : null;
 
-    // If joining an existing pool that already has an assigned driver, inherit that driver automatically!
     const existingPoolObj = availableCorridorPools.find((p) => p.poolId === selectedPoolGroupId);
     const inheritedDriver = existingPoolObj && existingPoolObj.driverName ? existingPoolObj : null;
 
@@ -499,7 +498,7 @@ export default function App() {
       } else {
         setStatusMessage(
           isSharedLoad
-            ? `🤝 Shared Pool ${activePoolId} Created! Other shippers & drivers on ${pickupHub.split('/')[0]} → ${dropHub.split('/')[0]} can now stack loads onto this truck.`
+            ? `🤝 Shared Pool ${activePoolId} Created! Other shippers & drivers can now stack loads onto this truck.`
             : 'Load broadcasted & Auto-Dispatched to Bengaluru WhatsApp Driver Groups!'
         );
       }
@@ -510,13 +509,97 @@ export default function App() {
     }
   };
 
-  // Driver clubs (stacks) another compatible partial order onto their current truck!
+  // ============================================================================
+  // COMPLETE REJECTION, PASSING, UN-CLUBBING & CANCELLATION ENGINE
+  // ============================================================================
+
+  // 1. Customer rejects a Driver's Bid
+  const handleCustomerRejectBid = async (bid) => {
+    await supabase.from('bids').update({
+      status: 'rejected_by_customer',
+      last_offered_by: 'customer'
+    }).eq('id', bid.id);
+    setStatusMessage(`❌ Rejected quote of ₹${bid.bid_amount} from ${bid.driver_name}.`);
+    setTimeout(() => setStatusMessage(''), 3500);
+    fetchLiveCloudData();
+  };
+
+  // 2. Driver rejects Customer's Counter-Offer or withdraws their own Bid
+  const handleDriverWithdrawOrRejectBid = async (bid, isRejectingCounter = false) => {
+    await supabase.from('bids').update({
+      status: isRejectingCounter ? 'counter_rejected_by_driver' : 'withdrawn_by_driver',
+      last_offered_by: 'driver'
+    }).eq('id', bid.id);
+    setStatusMessage(
+      isRejectingCounter
+        ? `❌ Rejected Lister's counter-offer of ₹${bid.customer_counter}. You can submit a new quote anytime.`
+        : `🗑️ Bid of ₹${bid.bid_amount} withdrawn.`
+    );
+    setTimeout(() => setStatusMessage(''), 3500);
+    fetchLiveCloudData();
+  };
+
+  // 3. Driver passes / declines an open load on their Radar
+  const handleDriverPassLoad = (bookingId) => {
+    setPassedBookingIds((prev) => [...prev, bookingId]);
+    setStatusMessage('⏭️ Load passed and hidden from your radar. Click "Restore Passed Loads" anytime to view it again.');
+    setTimeout(() => setStatusMessage(''), 3500);
+  };
+
+  // 4. Customer cancels an open broadcasting load
+  const handleCustomerCancelBooking = async (bookingId) => {
+    await supabase.from('bookings').delete().eq('id', bookingId);
+    setStatusMessage('🗑️ Load broadcast cancelled and removed from radar.');
+    setTimeout(() => setStatusMessage(''), 3500);
+    fetchLiveCloudData();
+  };
+
+  // 5. Either Customer or Driver releases/unassigns an 'accepted' load (or declines a Direct Stand Dispatch) back to open 'broadcasting'
+  const handleReleaseAcceptedLoad = async (booking, releasedByRole) => {
+    await supabase.from('bookings').update({
+      status: 'broadcasting',
+      agreed_fare: null,
+      driver_name: null,
+      driver_vehicle: null,
+      driver_upi: null,
+      pod_status: 'REOPENED_FOR_BIDDING',
+      route_progress: 0
+    }).eq('id', booking.id);
+
+    // If driver declined a direct stand dispatch, put their vehicle back on the Idle Stand automatically
+    if (releasedByRole === 'driver') {
+      await supabase.from('idle_vehicles').update({ is_idle: true }).eq('rc_number', rcNumber);
+    }
+
+    setStatusMessage(
+      releasedByRole === 'driver'
+        ? '🔄 Load released back to open radar & your vehicle is back on the Idle Stand.'
+        : '🔄 Driver unassigned. Load is now broadcasting to all drivers again!'
+    );
+    setTimeout(() => setStatusMessage(''), 4000);
+    fetchLiveCloudData();
+  };
+
+  // 6. Un-club / Remove a secondary order from a shared truck pool
+  const handleRemoveOrderFromPool = async (ord) => {
+    await supabase.from('bookings').update({
+      pool_group_id: null,
+      status: 'broadcasting',
+      agreed_fare: null,
+      driver_name: null,
+      driver_vehicle: null,
+      pod_status: 'UNCLUBBED_STANDALONE'
+    }).eq('id', ord.id);
+    setStatusMessage(`🔓 Removed "${ord.customer_name}" (${ord.weight_kg} kg) from shared truck pool.`);
+    setTimeout(() => setStatusMessage(''), 3500);
+    fetchLiveCloudData();
+  };
+
   const handleDriverClubOrderIntoPool = async (primaryBooking, secondaryBooking) => {
     const poolId =
       primaryBooking.pool_group_id ||
       `POOL-${primaryBooking.pickup_hub.slice(0, 3).toUpperCase()}-${Math.floor(100 + Math.random() * 900)}`;
 
-    // 1. Ensure primary booking has the pool_group_id and is marked as shared
     await supabase
       .from('bookings')
       .update({
@@ -525,7 +608,6 @@ export default function App() {
       })
       .eq('id', primaryBooking.id);
 
-    // 2. Club the secondary order onto the same driver and same pool_group_id
     await supabase
       .from('bookings')
       .update({
@@ -550,7 +632,6 @@ export default function App() {
     fetchLiveCloudData();
   };
 
-  // 1-Click Helper to spawn a 2nd/3rd partial order on the same corridor so you can test multi-order clubbing immediately
   const handleSimulateSecondPoolOrder = async (baseBooking) => {
     const maxCap = getFleetMaxWeight(baseBooking.vehicle_category);
     const sampleWeight = Math.min(200, Math.max(40, Math.round(maxCap * 0.28)));
@@ -587,7 +668,7 @@ export default function App() {
     ]);
 
     setStatusMessage(
-      `➕ Spawned "${randomMerchant}" (${sampleWeight} kg / ${samplePct}% Deck Space) on ${baseBooking.pickup_hub.split('/')[0]} → ${baseBooking.drop_hub.split('/')[0]}! Click "Stack Onto My Truck" below.`
+      `➕ Spawned "${randomMerchant}" (${sampleWeight} kg / ${samplePct}% Deck Space) on ${baseBooking.pickup_hub.split('/')[0]} → ${baseBooking.drop_hub.split('/')[0]}!`
     );
     setTimeout(() => setStatusMessage(''), 4500);
     fetchLiveCloudData();
@@ -650,7 +731,7 @@ export default function App() {
 
     await supabase.from('idle_vehicles').update({ is_idle: false }).eq('rc_number', rcNumber);
 
-    setStatusMessage(`✅ Load Accepted at ₹${booking.offered_fare}! You can now stack additional Part-Loads onto your remaining truck space.`);
+    setStatusMessage(`✅ Load Accepted at ₹${booking.offered_fare}!`);
     setTimeout(() => setStatusMessage(''), 4000);
     fetchLiveCloudData();
   };
@@ -664,7 +745,8 @@ export default function App() {
       vehicle_number: `${rcNumber} (${verifiedVehicleModel})`,
       driver_upi: `${driverNameInput.toLowerCase().replace(/\s+/g, '')}@ybl`,
       bid_amount: amount,
-      last_offered_by: 'driver'
+      last_offered_by: 'driver',
+      status: 'active'
     }]);
     setBidInputs({ ...bidInputs, [bookingId]: '' });
     setStatusMessage(`💬 Counter-Bid of ₹${amount} sent to Shopkeeper!`);
@@ -677,7 +759,8 @@ export default function App() {
     if (!counterAmt) return;
     await supabase.from('bids').update({
       customer_counter: counterAmt,
-      last_offered_by: 'customer'
+      last_offered_by: 'customer',
+      status: 'active'
     }).eq('id', bid.id);
     setCustomerCounterInputs({ ...customerCounterInputs, [bid.id]: '' });
     setStatusMessage(`🤝 Counter-offer of ₹${counterAmt} sent back to ${bid.driver_name}!`);
@@ -690,7 +773,8 @@ export default function App() {
     if (!newDriverAmt) return;
     await supabase.from('bids').update({
       bid_amount: newDriverAmt,
-      last_offered_by: 'driver'
+      last_offered_by: 'driver',
+      status: 'active'
     }).eq('id', bid.id);
     setDriverRecounterInputs({ ...driverRecounterInputs, [bid.id]: '' });
     setStatusMessage(`💬 Updated Driver Quote of ₹${newDriverAmt} sent to Shopkeeper!`);
@@ -765,6 +849,7 @@ export default function App() {
   };
 
   const filteredDriverBookings = bookings.filter((b) => {
+    if (passedBookingIds.includes(b.id)) return false;
     if (b.status !== 'broadcasting') return true;
     return calculateDistanceKm(driverBaseHub, b.pickup_hub) <= radiusFilterKm;
   });
@@ -1054,7 +1139,7 @@ export default function App() {
                     onClick={() => setDirectDispatchDriver(null)}
                     className="text-rose-300 hover:underline font-bold cursor-pointer"
                   >
-                    Cancel
+                    ✕ Cancel Direct Dispatch
                   </button>
                 </div>
               )}
@@ -1225,7 +1310,6 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* MULTI-ORDER SHARED CARGO CLUBBING ENGINE */}
                 <div className="space-y-3 bg-slate-950 p-3.5 rounded-xl border border-cyan-500/40">
                   <div className="flex justify-between items-center text-xs">
                     <span className="text-cyan-300 font-bold flex items-center gap-1.5">
@@ -1263,7 +1347,6 @@ export default function App() {
                     />
                   </label>
 
-                  {/* SHOW EXISTING ACTIVE SHARED TRUCK POOLS ON THIS CORRIDOR THAT CUSTOMER CAN JOIN */}
                   {isSharedLoad && availableCorridorPools.length > 0 && (
                     <div className="bg-cyan-500/10 border border-cyan-500/40 rounded-xl p-2.5 space-y-2 text-xs">
                       <div className="font-bold text-cyan-300 flex items-center gap-1">
@@ -1299,12 +1382,12 @@ export default function App() {
                               onClick={() => setSelectedPoolGroupId(isJoined ? null : pool.poolId)}
                               className={`mt-2 w-full py-1.5 rounded-lg font-black text-xs cursor-pointer transition ${
                                 isJoined
-                                  ? 'bg-emerald-500 text-slate-950'
+                                  ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
                                   : 'bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-500/40'
                               }`}
                             >
                               {isJoined
-                                ? `✅ Joined Truck Pool ${pool.poolId} (Click Broadcast Below)`
+                                ? `✕ Leave Truck Pool ${pool.poolId} (Book Standalone Instead)`
                                 : `🔗 Club My Load Into ${pool.poolId}`}
                             </button>
                           </div>
@@ -1434,7 +1517,6 @@ export default function App() {
                   const liveRemKm = calculateCoordsDistanceKm(vLat, vLng, dHub.lat, dHub.lng);
                   const etaMins = Math.max(3, Math.round(liveRemKm * 2.4));
 
-                  // Find all orders clubbed in the same shared truck pool!
                   const clubbedPoolOrders = b.pool_group_id
                     ? bookings.filter((other) => other.pool_group_id === b.pool_group_id)
                     : [b];
@@ -1462,23 +1544,39 @@ export default function App() {
                             </span>
                           )}
                         </div>
-                        <div className="flex items-center gap-2">
-                          <span className="text-[10px] bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 px-2 py-1 rounded-md font-mono">
-                            📡 Webhook Dispatched
-                          </span>
+                        <div className="flex flex-wrap items-center gap-2">
                           <button
                             onClick={() => shareOnWhatsApp(b)}
-                            className="bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1 rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer shadow"
+                            className="bg-emerald-600 hover:bg-emerald-500 text-white px-2.5 py-1 rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer shadow"
                           >
-                            <Share2 className="w-3.5 h-3.5" /> WhatsApp Blast
+                            <Share2 className="w-3.5 h-3.5" /> WhatsApp
                           </button>
+
+                          {/* CUSTOMER CANCEL / UNASSIGN BUTTONS */}
+                          {b.status === 'broadcasting' && (
+                            <button
+                              onClick={() => handleCustomerCancelBooking(b.id)}
+                              className="bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 px-2.5 py-1 rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer"
+                            >
+                              <XCircle className="w-3.5 h-3.5" /> Cancel Broadcast
+                            </button>
+                          )}
+                          {b.status === 'accepted' && (
+                            <button
+                              onClick={() => handleReleaseAcceptedLoad(b, 'customer')}
+                              className="bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 px-2.5 py-1 rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer"
+                            >
+                              <RotateCcw className="w-3.5 h-3.5" /> Unassign Driver
+                            </button>
+                          )}
+
                           <span className="text-xs font-bold px-2.5 py-1 rounded-full uppercase bg-amber-500/20 text-amber-300">
                             {b.status.replace('_', ' ')}
                           </span>
                         </div>
                       </div>
 
-                      {/* VISUAL MULTI-ORDER CONSOLIDATED TRUCK DECK BAR */}
+                      {/* VISUAL MULTI-ORDER CONSOLIDATED TRUCK DECK BAR WITH UN-CLUB OPTION */}
                       {b.is_shared_load && (
                         <div className="bg-slate-950 border border-cyan-500/30 rounded-xl p-3 space-y-2 text-xs">
                           <div className="flex flex-wrap justify-between items-center gap-2">
@@ -1490,7 +1588,6 @@ export default function App() {
                             </span>
                           </div>
 
-                          {/* Multi-colored segmented progress bar showing each customer's share of the truck */}
                           <div className="w-full bg-slate-800 h-3 rounded-full overflow-hidden flex">
                             {clubbedPoolOrders.map((ord, idx) => {
                               const segPct = Math.max(5, Math.round((Number(ord.weight_kg) / maxTruckKg) * 100));
@@ -1506,15 +1603,27 @@ export default function App() {
                           </div>
 
                           <div className="flex flex-wrap gap-2 pt-1">
-                            {clubbedPoolOrders.map((ord, idx) => {
+                            {clubbedPoolOrders.map((ord) => {
                               const segPct = Math.round((Number(ord.weight_kg) / maxTruckKg) * 100);
                               return (
-                                <span
+                                <div
                                   key={ord.id}
-                                  className="text-[10px] bg-slate-900 border border-slate-800 px-2 py-0.5 rounded text-slate-300"
+                                  className="text-[10px] bg-slate-900 border border-slate-800 px-2 py-1 rounded flex items-center gap-2 text-slate-300"
                                 >
-                                  <b className="text-white">{ord.customer_name}:</b> {ord.weight_kg}kg ({segPct}%) • ₹{ord.agreed_fare || ord.offered_fare}
-                                </span>
+                                  <span>
+                                    <b className="text-white">{ord.customer_name}:</b> {ord.weight_kg}kg ({segPct}%) • ₹{ord.agreed_fare || ord.offered_fare}
+                                  </span>
+                                  {clubbedPoolOrders.length > 1 && b.status !== 'delivered' && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleRemoveOrderFromPool(ord)}
+                                      className="text-rose-400 hover:text-rose-300 font-black cursor-pointer"
+                                      title="Un-club this order from the shared pool"
+                                    >
+                                      ✕ Un-club
+                                    </button>
+                                  )}
+                                </div>
                               );
                             })}
                           </div>
@@ -1582,56 +1691,101 @@ export default function App() {
                         </div>
                       </div>
 
+                      {/* CUSTOMER NEGOTIATION VIEW WITH ACCEPT, COUNTER, AND REJECT OPTIONS */}
                       {b.status === 'broadcasting' && bids.length > 0 && (
                         <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-3.5 space-y-2.5">
                           <div className="text-xs font-bold text-amber-300 flex items-center gap-1.5">
-                            <ArrowLeftRight className="w-4 h-4" /> Live Fare Negotiation ({bids.length} Active Bid{bids.length > 1 ? 's' : ''}):
+                            <ArrowLeftRight className="w-4 h-4" /> Live Fare Negotiation ({bids.length} Bid{bids.length > 1 ? 's' : ''}):
                           </div>
-                          {bids.map((bid) => (
-                            <div key={bid.id} className="bg-slate-950 border border-slate-800 p-3 rounded-xl space-y-2.5 text-xs">
-                              <div className="flex flex-wrap justify-between items-center gap-2">
-                                <div>
-                                  <div className="font-bold text-white">{bid.driver_name}</div>
-                                  <div className="text-slate-400 text-[11px]">{bid.vehicle_number}</div>
-                                </div>
-                                <div className="text-right space-y-0.5">
-                                  <div className="text-amber-400 font-black text-sm">
-                                    Driver Quote: ₹{bid.bid_amount}
-                                  </div>
-                                  {bid.customer_counter && (
-                                    <div className="text-cyan-300 font-bold text-[11px]">
-                                      Your Counter-Offer: ₹{bid.customer_counter} ({bid.last_offered_by === 'customer' ? 'Awaiting Driver' : 'Driver Re-Countered'})
+                          {bids.map((bid) => {
+                            const isRejected = bid.status && bid.status !== 'active';
+                            return (
+                              <div
+                                key={bid.id}
+                                className={`bg-slate-950 border p-3 rounded-xl space-y-2.5 text-xs ${
+                                  isRejected ? 'border-rose-500/30 opacity-75' : 'border-slate-800'
+                                }`}
+                              >
+                                <div className="flex flex-wrap justify-between items-center gap-2">
+                                  <div>
+                                    <div className="font-bold text-white flex items-center gap-2">
+                                      {bid.driver_name}
+                                      {isRejected && (
+                                        <span className="bg-rose-500/20 text-rose-300 border border-rose-500/40 px-2 py-0.5 rounded text-[10px]">
+                                          {bid.status.replaceAll('_', ' ').toUpperCase()}
+                                        </span>
+                                      )}
                                     </div>
-                                  )}
+                                    <div className="text-slate-400 text-[11px]">{bid.vehicle_number}</div>
+                                  </div>
+                                  <div className="text-right space-y-0.5">
+                                    <div className="text-amber-400 font-black text-sm">
+                                      Driver Quote: ₹{bid.bid_amount}
+                                    </div>
+                                    {bid.customer_counter && (
+                                      <div className="text-cyan-300 font-bold text-[11px]">
+                                        Your Counter: ₹{bid.customer_counter}
+                                      </div>
+                                    )}
+                                  </div>
                                 </div>
-                              </div>
 
-                              <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-800/80">
-                                <button
-                                  onClick={() => handleLockAgreedBid(b, bid, bid.bid_amount)}
-                                  className="bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black px-3.5 py-1.5 rounded-lg cursor-pointer"
-                                >
-                                  ✅ Accept Driver's ₹{bid.bid_amount}
-                                </button>
+                                {!isRejected ? (
+                                  <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-800/80">
+                                    <div className="flex items-center gap-2">
+                                      <button
+                                        onClick={() => handleLockAgreedBid(b, bid, bid.bid_amount)}
+                                        className="bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black px-3 py-1.5 rounded-lg cursor-pointer"
+                                      >
+                                        ✅ Accept ₹{bid.bid_amount}
+                                      </button>
+                                      <button
+                                        onClick={() => handleCustomerRejectBid(bid)}
+                                        className="bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 font-bold px-3 py-1.5 rounded-lg cursor-pointer"
+                                      >
+                                        ✕ Reject Quote
+                                      </button>
+                                    </div>
 
-                                <div className="flex items-center gap-1.5">
-                                  <input
-                                    type="number"
-                                    placeholder="Your Counter ₹"
-                                    value={customerCounterInputs[bid.id] || ''}
-                                    onChange={(e) => setCustomerCounterInputs({ ...customerCounterInputs, [bid.id]: e.target.value })}
-                                    className="bg-slate-900 border border-cyan-500/50 rounded-lg px-2.5 py-1.5 text-white w-32 text-xs"
-                                  />
-                                  <button
-                                    onClick={() => handleCustomerCounterOffer(bid)}
-                                    className="bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-black px-3 py-1.5 rounded-lg cursor-pointer"
-                                  >
-                                    Counter Back
-                                  </button>
-                                </div>
+                                    <div className="flex items-center gap-1.5">
+                                      <input
+                                        type="number"
+                                        placeholder="Counter ₹"
+                                        value={customerCounterInputs[bid.id] || ''}
+                                        onChange={(e) => setCustomerCounterInputs({ ...customerCounterInputs, [bid.id]: e.target.value })}
+                                        className="bg-slate-900 border border-cyan-500/50 rounded-lg px-2.5 py-1.5 text-white w-28 text-xs"
+                                      />
+                                      <button
+                                        onClick={() => handleCustomerCounterOffer(bid)}
+                                        className="bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-black px-3 py-1.5 rounded-lg cursor-pointer"
+                                      >
+                                        Counter Back
+                                      </button>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <div className="flex justify-between items-center pt-2 border-t border-slate-800/80 text-[11px] text-slate-400">
+                                    <span>Offer declined. Send a fresh counter-offer to reopen negotiation:</span>
+                                    <div className="flex items-center gap-1.5">
+                                      <input
+                                        type="number"
+                                        placeholder="New Counter ₹"
+                                        value={customerCounterInputs[bid.id] || ''}
+                                        onChange={(e) => setCustomerCounterInputs({ ...customerCounterInputs, [bid.id]: e.target.value })}
+                                        className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-white w-28 text-xs"
+                                      />
+                                      <button
+                                        onClick={() => handleCustomerCounterOffer(bid)}
+                                        className="bg-slate-800 hover:bg-cyan-500 hover:text-slate-950 text-cyan-300 px-2.5 py-1 rounded-lg font-bold cursor-pointer"
+                                      >
+                                        Reopen with Counter
+                                      </button>
+                                    </div>
+                                  </div>
+                                )}
                               </div>
-                            </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       )}
 
@@ -1760,17 +1914,30 @@ export default function App() {
             </div>
 
             <div className="lg:col-span-8 space-y-4">
-              <div className="flex justify-between items-center">
+              <div className="flex flex-wrap justify-between items-center gap-2">
                 <h2 className="text-lg font-bold text-white flex items-center gap-2">
                   <Radio className="w-5 h-5 text-emerald-400 animate-pulse" />
                   Filtered Radar ({filteredDriverBookings.length} Loads within {radiusFilterKm} km)
                 </h2>
-                <button
-                  onClick={fetchLiveCloudData}
-                  className="text-xs bg-slate-800 hover:bg-slate-700 px-3 py-1.5 rounded-lg text-slate-300 cursor-pointer"
-                >
-                  Refresh Radar
-                </button>
+                <div className="flex items-center gap-2">
+                  {(passedBookingIds.length > 0 || skippedCoLoadIds.length > 0) && (
+                    <button
+                      onClick={() => {
+                        setPassedBookingIds([]);
+                        setSkippedCoLoadIds([]);
+                      }}
+                      className="text-xs bg-amber-500/20 border border-amber-500/40 text-amber-300 px-3 py-1.5 rounded-lg font-bold cursor-pointer"
+                    >
+                      ↺ Restore {passedBookingIds.length + skippedCoLoadIds.length} Passed/Skipped Load(s)
+                    </button>
+                  )}
+                  <button
+                    onClick={fetchLiveCloudData}
+                    className="text-xs bg-slate-800 hover:bg-slate-700 px-3 py-1.5 rounded-lg text-slate-300 cursor-pointer"
+                  >
+                    Refresh Radar
+                  </button>
+                </div>
               </div>
 
               {filteredDriverBookings.map((b) => {
@@ -1781,7 +1948,6 @@ export default function App() {
                 const vLat = b.driver_lat || getHubCoords(b.pickup_hub).lat;
                 const vLng = b.driver_lng || getHubCoords(b.pickup_hub).lng;
 
-                // Calculate Consolidated Pool Orders on this Truck
                 const clubbedPoolOrders = b.pool_group_id
                   ? bookings.filter((other) => other.pool_group_id === b.pool_group_id)
                   : [b];
@@ -1791,10 +1957,10 @@ export default function App() {
                 const totalPoolPct = Math.min(100, Math.round((totalPoolKg / maxTruckKg) * 100));
                 const totalPoolFare = clubbedPoolOrders.reduce((acc, item) => acc + Number(item.agreed_fare || item.offered_fare || 0), 0);
 
-                // Find other open broadcasting loads on the SAME corridor that fit inside the remaining truck weight!
                 const stackableCorridorLoads = bookings.filter(
                   (other) =>
                     other.id !== b.id &&
+                    !skippedCoLoadIds.includes(other.id) &&
                     (!b.pool_group_id || other.pool_group_id !== b.pool_group_id) &&
                     other.status === 'broadcasting' &&
                     other.pickup_hub === b.pickup_hub &&
@@ -1805,6 +1971,7 @@ export default function App() {
                 const matchingReturnLoads = bookings.filter(
                   (other) =>
                     other.id !== b.id &&
+                    !passedBookingIds.includes(other.id) &&
                     other.status === 'broadcasting' &&
                     calculateDistanceKm(b.drop_hub, other.pickup_hub) <= 6
                 );
@@ -1841,7 +2008,7 @@ export default function App() {
                       </div>
                     </div>
 
-                    {/* DRIVER-SIDE MULTI-ORDER STACKING / CLUBBING ENGINE */}
+                    {/* DRIVER-SIDE MULTI-ORDER STACKING / CLUBBING ENGINE WITH UN-CLUB & SKIP */}
                     <div className="bg-slate-950 border border-cyan-500/40 rounded-xl p-3.5 space-y-2.5 text-xs">
                       <div className="flex flex-wrap justify-between items-center gap-2">
                         <span className="text-cyan-300 font-black flex items-center gap-1.5">
@@ -1867,13 +2034,27 @@ export default function App() {
 
                       <div className="flex flex-wrap gap-1.5">
                         {clubbedPoolOrders.map((ord, idx) => (
-                          <span key={ord.id} className="text-[10px] bg-slate-900 border border-slate-800 px-2 py-0.5 rounded text-slate-200">
-                            #{idx + 1} <b>{ord.customer_name}</b> ({ord.weight_kg}kg • ₹{ord.agreed_fare || ord.offered_fare})
-                          </span>
+                          <div
+                            key={ord.id}
+                            className="text-[10px] bg-slate-900 border border-slate-800 px-2 py-1 rounded flex items-center gap-2 text-slate-200"
+                          >
+                            <span>
+                              #{idx + 1} <b>{ord.customer_name}</b> ({ord.weight_kg}kg • ₹{ord.agreed_fare || ord.offered_fare})
+                            </span>
+                            {clubbedPoolOrders.length > 1 && b.status !== 'delivered' && (
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveOrderFromPool(ord)}
+                                className="text-rose-400 hover:text-rose-300 font-black cursor-pointer"
+                                title="Remove this order from your truck pool"
+                              >
+                                ✕ Remove
+                              </button>
+                            )}
+                          </div>
                         ))}
                       </div>
 
-                      {/* IF SPACE REMAINS, LET DRIVER STACK COMPATIBLE CORRIDOR ORDERS WITH 1 CLICK */}
                       {remainingDeckKg > 20 && (
                         <div className="pt-2 border-t border-slate-800 space-y-2">
                           {stackableCorridorLoads.length > 0 ? (
@@ -1902,6 +2083,13 @@ export default function App() {
                                       className="bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-black px-3 py-1 rounded-lg cursor-pointer"
                                     >
                                       + Stack Onto My Truck
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setSkippedCoLoadIds((prev) => [...prev, coLoad.id])}
+                                      className="bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 font-bold px-2.5 py-1 rounded-lg cursor-pointer"
+                                    >
+                                      ✕ Skip
                                     </button>
                                   </div>
                                 </div>
@@ -1953,15 +2141,25 @@ export default function App() {
                       </div>
                     </div>
 
+                    {/* DRIVER ACTIONS: ACCEPT, BID, OR PASS/DECLINE LOAD */}
                     {b.status === 'broadcasting' && (
                       <div className="space-y-3 pt-2 border-t border-slate-800">
                         <div className="flex flex-wrap justify-between items-center gap-3">
-                          <button
-                            onClick={() => handleDriverDirectAccept(b)}
-                            className="bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black px-5 py-2.5 rounded-xl text-xs cursor-pointer"
-                          >
-                            Accept Lister's ₹{b.offered_fare} Instantly
-                          </button>
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => handleDriverDirectAccept(b)}
+                              className="bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black px-4 py-2.5 rounded-xl text-xs cursor-pointer"
+                            >
+                              ✅ Accept ₹{b.offered_fare} Instantly
+                            </button>
+                            <button
+                              onClick={() => handleDriverPassLoad(b.id)}
+                              className="bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 font-bold px-3.5 py-2.5 rounded-xl text-xs cursor-pointer flex items-center gap-1"
+                            >
+                              <XCircle className="w-3.5 h-3.5" /> Pass / Not Interested
+                            </button>
+                          </div>
+
                           <div className="flex items-center gap-2">
                             <input
                               type="number"
@@ -1979,62 +2177,98 @@ export default function App() {
                           </div>
                         </div>
 
+                        {/* DRIVER NEGOTIATION THREAD WITH REJECT COUNTER & WITHDRAW BID OPTIONS */}
                         {bookingBids.length > 0 && (
                           <div className="bg-slate-950 border border-amber-500/30 rounded-xl p-3 space-y-2 text-xs">
                             <div className="text-amber-300 font-bold flex items-center gap-1">
                               <ArrowLeftRight className="w-3.5 h-3.5" /> Active Negotiation Thread with Lister:
                             </div>
-                            {bookingBids.map((bid) => (
-                              <div key={bid.id} className="bg-slate-900 border border-slate-800 p-2.5 rounded-lg space-y-2">
-                                <div className="flex justify-between items-center">
-                                  <span className="text-slate-300">
-                                    Your Quote: <b className="text-amber-400">₹{bid.bid_amount}</b>
-                                  </span>
-                                  {bid.customer_counter ? (
-                                    <span className="bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 px-2 py-0.5 rounded font-bold">
-                                      Lister Countered: ₹{bid.customer_counter}
+                            {bookingBids.map((bid) => {
+                              const isRejected = bid.status && bid.status !== 'active';
+                              return (
+                                <div
+                                  key={bid.id}
+                                  className={`bg-slate-900 border p-2.5 rounded-lg space-y-2 ${
+                                    isRejected ? 'border-rose-500/30 opacity-75' : 'border-slate-800'
+                                  }`}
+                                >
+                                  <div className="flex flex-wrap justify-between items-center gap-2">
+                                    <span className="text-slate-300 flex items-center gap-2">
+                                      Your Quote: <b className="text-amber-400">₹{bid.bid_amount}</b>
+                                      {isRejected && (
+                                        <span className="bg-rose-500/20 text-rose-300 border border-rose-500/40 px-2 py-0.5 rounded text-[10px]">
+                                          {bid.status.replaceAll('_', ' ').toUpperCase()}
+                                        </span>
+                                      )}
                                     </span>
-                                  ) : (
-                                    <span className="text-slate-500 text-[11px]">Waiting for Lister response...</span>
-                                  )}
-                                </div>
 
-                                {bid.customer_counter && (
-                                  <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-800">
-                                    <button
-                                      onClick={() => handleLockAgreedBid(b, bid, bid.customer_counter)}
-                                      className="bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black px-3 py-1.5 rounded-lg cursor-pointer"
-                                    >
-                                      🤝 Accept Lister's ₹{bid.customer_counter}
-                                    </button>
-                                    <div className="flex items-center gap-1.5">
-                                      <input
-                                        type="number"
-                                        placeholder="Re-Counter ₹"
-                                        value={driverRecounterInputs[bid.id] || ''}
-                                        onChange={(e) => setDriverRecounterInputs({ ...driverRecounterInputs, [bid.id]: e.target.value })}
-                                        className="bg-slate-950 border border-amber-500/50 rounded-lg px-2.5 py-1 text-white w-28 text-xs"
-                                      />
-                                      <button
-                                        onClick={() => handleDriverRecounterOffer(bid)}
-                                        className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold px-2.5 py-1 rounded-lg cursor-pointer"
-                                      >
-                                        Re-Counter
-                                      </button>
+                                    <div className="flex items-center gap-2">
+                                      {bid.customer_counter ? (
+                                        <span className="bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 px-2 py-0.5 rounded font-bold">
+                                          Lister Countered: ₹{bid.customer_counter}
+                                        </span>
+                                      ) : (
+                                        <span className="text-slate-500 text-[11px]">Waiting for Lister response...</span>
+                                      )}
+
+                                      {!isRejected && (
+                                        <button
+                                          onClick={() => handleDriverWithdrawOrRejectBid(bid, false)}
+                                          className="text-rose-400 hover:underline text-[11px] font-bold cursor-pointer"
+                                        >
+                                          ✕ Withdraw Bid
+                                        </button>
+                                      )}
                                     </div>
                                   </div>
-                                )}
-                              </div>
-                            ))}
+
+                                  {bid.customer_counter && !isRejected && (
+                                    <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-800">
+                                      <div className="flex items-center gap-2">
+                                        <button
+                                          onClick={() => handleLockAgreedBid(b, bid, bid.customer_counter)}
+                                          className="bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black px-3 py-1.5 rounded-lg cursor-pointer"
+                                        >
+                                          🤝 Accept ₹{bid.customer_counter}
+                                        </button>
+                                        <button
+                                          onClick={() => handleDriverWithdrawOrRejectBid(bid, true)}
+                                          className="bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 font-bold px-3 py-1.5 rounded-lg cursor-pointer"
+                                        >
+                                          ✕ Reject Counter
+                                        </button>
+                                      </div>
+
+                                      <div className="flex items-center gap-1.5">
+                                        <input
+                                          type="number"
+                                          placeholder="Re-Counter ₹"
+                                          value={driverRecounterInputs[bid.id] || ''}
+                                          onChange={(e) => setDriverRecounterInputs({ ...driverRecounterInputs, [bid.id]: e.target.value })}
+                                          className="bg-slate-950 border border-amber-500/50 rounded-lg px-2.5 py-1 text-white w-28 text-xs"
+                                        />
+                                        <button
+                                          onClick={() => handleDriverRecounterOffer(bid)}
+                                          className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold px-2.5 py-1 rounded-lg cursor-pointer"
+                                        >
+                                          Re-Counter
+                                        </button>
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
                           </div>
                         )}
                       </div>
                     )}
 
+                    {/* DRIVER ACCEPTED VIEW WITH OPTION TO RELEASE / DECLINE BEFORE PICKUP OTP */}
                     {b.status === 'accepted' && (
-                      <div className="bg-blue-500/10 border border-blue-500/30 p-3 rounded-xl flex justify-between items-center text-xs">
-                        <span>Enter 4-digit Pickup OTP from Shopkeeper:</span>
-                        <div className="flex gap-2">
+                      <div className="bg-blue-500/10 border border-blue-500/30 p-3 rounded-xl flex flex-wrap justify-between items-center gap-3 text-xs">
+                        <div className="flex items-center gap-2">
+                          <span>Enter 4-digit Pickup OTP from Shopkeeper:</span>
                           <input
                             type="text"
                             maxLength={4}
@@ -2050,6 +2284,14 @@ export default function App() {
                             Verify & Start
                           </button>
                         </div>
+
+                        <button
+                          onClick={() => handleReleaseAcceptedLoad(b, 'driver')}
+                          className="bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 font-bold px-3 py-1 rounded-lg cursor-pointer flex items-center gap-1"
+                        >
+                          <XCircle className="w-3.5 h-3.5" />
+                          {b.pod_status === 'DIRECT_STAND_ASSIGNED' ? 'Decline Direct Dispatch' : 'Release Load'}
+                        </button>
                       </div>
                     )}
 
@@ -2086,6 +2328,12 @@ export default function App() {
                                     className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-black px-3 py-1.5 rounded-lg cursor-pointer"
                                   >
                                     Lock Return Load
+                                  </button>
+                                  <button
+                                    onClick={() => handleDriverPassLoad(retLoad.id)}
+                                    className="bg-rose-500/20 text-rose-300 border border-rose-500/40 font-bold px-2.5 py-1.5 rounded-lg cursor-pointer"
+                                  >
+                                    ✕ Pass
                                   </button>
                                 </div>
                               </div>
