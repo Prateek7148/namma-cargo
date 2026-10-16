@@ -4,7 +4,7 @@ import { QRCodeSVG } from 'qrcode.react';
 import {
   Truck, Package, Navigation,
   Clock, Sparkles, Radio, MapPin, Share2, LogOut, ShieldCheck, CheckCircle,
-  AlertTriangle, FileCheck, LocateFixed, Repeat, Sliders, ArrowLeftRight, Layers, Shield
+  AlertTriangle, FileCheck, LocateFixed, Repeat, Sliders, ArrowLeftRight, Layers, Shield, PlusCircle
 } from 'lucide-react';
 
 // ============================================================================
@@ -42,14 +42,19 @@ const FLEET_TYPES = [
 
 const SMART_CARGO_PRESETS = [
   { label: '⚡ Small Spares', desc: 'Urgent Spare Parts & Tools', units: '2 Boxes', weight: 20, fleet: '2W' },
-  { label: '📦 Electrical Boxes', desc: 'Hardware & Electrical Cartons', units: '12 Cartons', weight: 280, fleet: '3W' },
-  { label: '🪑 Furniture / Retail', desc: 'Commercial Furniture & Fixtures', units: '6 Crates', weight: 450, fleet: '3W' },
-  { label: '⚙️ CNC Machinery', desc: 'Industrial Lathe / CNC Machine Parts', units: '2 Pallets', weight: 850, fleet: '4W' },
+  { label: '📦 Electrical Boxes', desc: 'Hardware & Electrical Cartons', units: '12 Cartons', weight: 150, fleet: '3W' },
+  { label: '🪑 Furniture / Retail', desc: 'Commercial Furniture & Fixtures', units: '6 Crates', weight: 350, fleet: '4W' },
+  { label: '⚙️ CNC Machinery', desc: 'Industrial Lathe / CNC Machine Parts', units: '2 Pallets', weight: 500, fleet: '4W' },
   { label: '🧱 Cement & Steel', desc: 'Construction Bags & TMT Iron Rods', units: '36 Bags / Bundles', weight: 1800, fleet: '6W' }
 ];
 
 function getHubCoords(hubName) {
   return BENGALURU_HUBS.find((h) => h.name === hubName) || BENGALURU_HUBS[0];
+}
+
+function getFleetMaxWeight(fleetId) {
+  const f = FLEET_TYPES.find((item) => item.id === fleetId);
+  return f ? f.maxWeight : 1500;
 }
 
 function calculateCoordsDistanceKm(lat1, lon1, lat2, lon2) {
@@ -103,18 +108,19 @@ export default function App() {
   const [dropHub, setDropHub] = useState(BENGALURU_HUBS[3].name);
   const [cargoType, setCargoType] = useState('Hardware & Electrical Cartons');
   const [packageUnits, setPackageUnits] = useState('12 Cartons');
-  const [weightKg, setWeightKg] = useState(280);
+  const [weightKg, setWeightKg] = useState(150);
   const [selectedFleet, setSelectedFleet] = useState('3W');
   const [manualFleetOverride, setManualFleetOverride] = useState(false);
   const [customFare, setCustomFare] = useState(380);
   const [ewayBill, setEwayBill] = useState('');
 
-  // Feature #8: Shared Cargo Pooling (Part-Load) & ₹49 Transit Insurance
-  const [isSharedLoad, setIsSharedLoad] = useState(false);
+  // Shared Cargo Pooling (Part-Load) & ₹49 Transit Insurance
+  const [isSharedLoad, setIsSharedLoad] = useState(true);
+  const [selectedPoolGroupId, setSelectedPoolGroupId] = useState(null);
   const [hasInsurance, setHasInsurance] = useState(false);
   const [directDispatchDriver, setDirectDispatchDriver] = useState(null);
 
-  // Driver & Digital Tempo Stand State (#7)
+  // Driver & Digital Tempo Stand State
   const [driverBaseHub, setDriverBaseHub] = useState(BENGALURU_HUBS[3].name);
   const [preferredReturnHub, setPreferredReturnHub] = useState(BENGALURU_HUBS[0].name);
   const [isDriverListedIdle, setIsDriverListedIdle] = useState(false);
@@ -126,11 +132,9 @@ export default function App() {
   const [receiverInputs, setReceiverInputs] = useState({});
   const [statusMessage, setStatusMessage] = useState('');
 
-  // Calculate truck capacity utilization %
   const activeFleetObj = FLEET_TYPES.find((f) => f.id === selectedFleet) || FLEET_TYPES[1];
   const utilizationPct = Math.min(100, Math.max(5, Math.round((weightKg / activeFleetObj.maxWeight) * 100)));
 
-  // Recalculate vehicle & fare when weight, hubs, shared pooling, or insurance change
   useEffect(() => {
     let fleetObj = FLEET_TYPES.find((f) => f.id === selectedFleet) || FLEET_TYPES[1];
     if (!manualFleetOverride) {
@@ -141,11 +145,9 @@ export default function App() {
     const distKm = calculateDistanceKm(pickupHub, dropHub);
     let baseCalc = Math.round((fleetObj.baseFare + Math.max(4, distKm) * fleetObj.perKm) / 10) * 10;
 
-    // Shared Cargo Pooling (Part-Load) gives 30% discount to Customer
     if (isSharedLoad) {
       baseCalc = Math.round((baseCalc * 0.7) / 10) * 10;
     }
-    // Optional ₹49 Transit Insurance (₹2,00,000 Coverage)
     if (hasInsurance) {
       baseCalc += 49;
     }
@@ -154,7 +156,7 @@ export default function App() {
   }, [weightKg, pickupHub, dropHub, selectedFleet, manualFleetOverride, isSharedLoad, hasInsurance]);
 
   const applySmartCargoPreset = (preset) => {
-    setManualFleetOverride(false);
+    setManualFleetOverride(true);
     setCargoType(preset.desc);
     setPackageUnits(preset.units);
     setWeightKg(preset.weight);
@@ -167,7 +169,6 @@ export default function App() {
     const cleanWeight = Math.max(1, Math.min(10000, Number(val) || 1));
     setManualFleetOverride(false);
     setWeightKg(cleanWeight);
-    if (cleanWeight > 1200) setIsSharedLoad(false);
   };
 
   const handleManualFleetSelect = (fleetId) => {
@@ -181,7 +182,7 @@ export default function App() {
       .from('bookings')
       .select('*')
       .order('created_at', { ascending: false })
-      .limit(25);
+      .limit(30);
 
     const { data: bidData } = await supabase.from('bids').select('*').order('created_at', { ascending: true });
     const { data: idleData } = await supabase
@@ -225,9 +226,7 @@ export default function App() {
     return () => { supabase.removeChannel(channel); };
   }, [userSession, rcNumber]);
 
-  // ============================================================================
-  // AUTOMATIC REAL-TIME HARDWARE GPS TRACKER FOR ACTIVE TRIPS
-  // ============================================================================
+  // Automatic real-time hardware GPS tracker
   useEffect(() => {
     if (!userSession || mode !== 'driver' || !navigator.geolocation) return;
 
@@ -345,9 +344,6 @@ export default function App() {
     setKycError('');
   };
 
-  // ============================================================================
-  // FEATURE #7: DRIVER TOGGLES IDLE VEHICLE STAND AVAILABILITY
-  // ============================================================================
   const handleToggleDriverIdleStand = async () => {
     const nextState = !isDriverListedIdle;
     const is4W = verifiedVehicleModel.toLowerCase().includes('4w') || verifiedVehicleModel.toLowerCase().includes('ace');
@@ -387,7 +383,6 @@ export default function App() {
     }
   };
 
-  // Customer selects a parked Idle Vehicle from the stand to dispatch directly
   const handleSelectIdleVehicleForBooking = (vehicle) => {
     setPickupHub(vehicle.current_stand_hub);
     if (vehicle.preferred_return_hub && BENGALURU_HUBS.some((h) => h.name === vehicle.preferred_return_hub)) {
@@ -397,10 +392,43 @@ export default function App() {
     setSelectedFleet(vehicle.vehicle_category);
     setDirectDispatchDriver(vehicle);
     setStatusMessage(
-      `🚛 Pre-Selected Idle Vehicle: ${vehicle.driver_name} (${vehicle.rc_number}) at ${vehicle.current_stand_hub}! Click Broadcast to assign.`
+      `🚛 Pre-Selected Idle Vehicle: ${vehicle.driver_name} (${vehicle.rc_number}) at ${vehicle.current_stand_hub}!`
     );
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
+
+  // ============================================================================
+  // MULTI-ORDER SHARED POOLING ENGINE (CLUBBING ORDERS ON THE SAME CORRIDOR)
+  // ============================================================================
+  // Find existing shared pools on the same Pickup -> Drop corridor that still have deck space left
+  const availableCorridorPools = (() => {
+    const poolsMap = {};
+    bookings.forEach((b) => {
+      if (
+        b.is_shared_load &&
+        b.status !== 'delivered' &&
+        b.pickup_hub === pickupHub &&
+        b.drop_hub === dropHub &&
+        b.pool_group_id
+      ) {
+        if (!poolsMap[b.pool_group_id]) {
+          poolsMap[b.pool_group_id] = {
+            poolId: b.pool_group_id,
+            vehicleCategory: b.vehicle_category,
+            maxCapacityKg: getFleetMaxWeight(b.vehicle_category),
+            usedWeightKg: 0,
+            orders: [],
+            driverName: b.driver_name,
+            driverVehicle: b.driver_vehicle,
+            status: b.status
+          };
+        }
+        poolsMap[b.pool_group_id].usedWeightKg += Number(b.weight_kg || 0);
+        poolsMap[b.pool_group_id].orders.push(b);
+      }
+    });
+    return Object.values(poolsMap).filter((p) => p.usedWeightKg + Number(weightKg) <= p.maxCapacityKg);
+  })();
 
   const handleBroadcastLoad = async (e) => {
     e.preventDefault();
@@ -412,6 +440,15 @@ export default function App() {
     const startCoords = getHubCoords(pickupHub);
     const fullCargoLabel = packageUnits ? `${cargoType} (${packageUnits})` : cargoType;
 
+    // Assign either the joined pool ID, or create a brand-new pool group ID if shared load is enabled
+    const activePoolId = isSharedLoad
+      ? selectedPoolGroupId || `POOL-${pickupHub.slice(0, 3).toUpperCase()}-${Math.floor(100 + Math.random() * 900)}`
+      : null;
+
+    // If joining an existing pool that already has an assigned driver, inherit that driver automatically!
+    const existingPoolObj = availableCorridorPools.find((p) => p.poolId === selectedPoolGroupId);
+    const inheritedDriver = existingPoolObj && existingPoolObj.driverName ? existingPoolObj : null;
+
     const payload = {
       customer_name: customerName,
       customer_phone: userSession,
@@ -420,22 +457,33 @@ export default function App() {
       cargo_type: fullCargoLabel,
       package_units: packageUnits || 'Custom Lot',
       weight_kg: Number(weightKg),
-      vehicle_category: selectedFleet,
+      vehicle_category: existingPoolObj ? existingPoolObj.vehicleCategory : selectedFleet,
       offered_fare: Number(customFare),
-      status: directDispatchDriver ? 'accepted' : 'broadcasting',
-      agreed_fare: directDispatchDriver ? Number(customFare) : null,
-      driver_name: directDispatchDriver ? directDispatchDriver.driver_name : null,
-      driver_vehicle: directDispatchDriver ? `${directDispatchDriver.rc_number} • ${directDispatchDriver.vehicle_model}` : null,
-      driver_upi: directDispatchDriver ? `${directDispatchDriver.driver_name.toLowerCase().replace(/\s+/g, '')}@ybl` : null,
+      status: directDispatchDriver || inheritedDriver ? 'accepted' : 'broadcasting',
+      agreed_fare: directDispatchDriver || inheritedDriver ? Number(customFare) : null,
+      driver_name: directDispatchDriver
+        ? directDispatchDriver.driver_name
+        : inheritedDriver
+        ? inheritedDriver.driverName
+        : null,
+      driver_vehicle: directDispatchDriver
+        ? `${directDispatchDriver.rc_number} • ${directDispatchDriver.vehicle_model}`
+        : inheritedDriver
+        ? inheritedDriver.driverVehicle
+        : null,
+      driver_upi: directDispatchDriver
+        ? `${directDispatchDriver.driver_name.toLowerCase().replace(/\s+/g, '')}@ybl`
+        : null,
       pickup_otp: generatedOtp,
       eway_bill_no: ewayBill || null,
-      pod_status: directDispatchDriver ? 'DIRECT_STAND_ASSIGNED' : 'AWAITING_PICKUP',
+      pod_status: selectedPoolGroupId ? `CLUBBED_IN_${selectedPoolGroupId}` : 'AWAITING_PICKUP',
       driver_lat: startCoords.lat,
       driver_lng: startCoords.lng,
-      route_progress: directDispatchDriver ? 10 : 0,
+      route_progress: directDispatchDriver || inheritedDriver ? 10 : 0,
       is_shared_load: isSharedLoad,
       truck_utilization_pct: utilizationPct,
-      has_insurance: hasInsurance
+      has_insurance: hasInsurance,
+      pool_group_id: activePoolId
     };
 
     const { error } = await supabase.from('bookings').insert([payload]);
@@ -443,16 +491,106 @@ export default function App() {
     if (!error) {
       if (directDispatchDriver) {
         await supabase.from('idle_vehicles').update({ is_idle: false }).eq('rc_number', directDispatchDriver.rc_number);
-        setStatusMessage(`✅ Directly Dispatched Idle Vehicle ${directDispatchDriver.rc_number} (${directDispatchDriver.driver_name})!`);
+        setStatusMessage(`✅ Directly Dispatched Idle Vehicle ${directDispatchDriver.rc_number}!`);
         setDirectDispatchDriver(null);
+      } else if (selectedPoolGroupId) {
+        setStatusMessage(`🤝 Order Clubbed into Shared Truck Pool ${selectedPoolGroupId}! Combined Deck Space Updated.`);
+        setSelectedPoolGroupId(null);
       } else {
-        setStatusMessage('Load broadcasted & Auto-Dispatched to Bengaluru WhatsApp Driver Groups!');
+        setStatusMessage(
+          isSharedLoad
+            ? `🤝 Shared Pool ${activePoolId} Created! Other shippers & drivers on ${pickupHub.split('/')[0]} → ${dropHub.split('/')[0]} can now stack loads onto this truck.`
+            : 'Load broadcasted & Auto-Dispatched to Bengaluru WhatsApp Driver Groups!'
+        );
       }
-      setTimeout(() => setStatusMessage(''), 4000);
+      setTimeout(() => setStatusMessage(''), 4500);
       fetchLiveCloudData();
     } else {
       alert('Broadcast error: ' + error.message);
     }
+  };
+
+  // Driver clubs (stacks) another compatible partial order onto their current truck!
+  const handleDriverClubOrderIntoPool = async (primaryBooking, secondaryBooking) => {
+    const poolId =
+      primaryBooking.pool_group_id ||
+      `POOL-${primaryBooking.pickup_hub.slice(0, 3).toUpperCase()}-${Math.floor(100 + Math.random() * 900)}`;
+
+    // 1. Ensure primary booking has the pool_group_id and is marked as shared
+    await supabase
+      .from('bookings')
+      .update({
+        pool_group_id: poolId,
+        is_shared_load: true
+      })
+      .eq('id', primaryBooking.id);
+
+    // 2. Club the secondary order onto the same driver and same pool_group_id
+    await supabase
+      .from('bookings')
+      .update({
+        status: primaryBooking.status,
+        agreed_fare: secondaryBooking.offered_fare,
+        driver_name: driverNameInput,
+        driver_vehicle: `${rcNumber} • ${verifiedVehicleModel}`,
+        driver_upi: `${driverNameInput.toLowerCase().replace(/\s+/g, '')}@ybl`,
+        pool_group_id: poolId,
+        is_shared_load: true,
+        pod_status: `CLUBBED_ON_TRUCK_${rcNumber}`,
+        driver_lat: primaryBooking.driver_lat,
+        driver_lng: primaryBooking.driver_lng,
+        route_progress: primaryBooking.route_progress || 10
+      })
+      .eq('id', secondaryBooking.id);
+
+    setStatusMessage(
+      `📦 Stacked "${secondaryBooking.cargo_type}" (${secondaryBooking.weight_kg} kg) onto your truck! You now earn both fares on 1 trip.`
+    );
+    setTimeout(() => setStatusMessage(''), 4500);
+    fetchLiveCloudData();
+  };
+
+  // 1-Click Helper to spawn a 2nd/3rd partial order on the same corridor so you can test multi-order clubbing immediately
+  const handleSimulateSecondPoolOrder = async (baseBooking) => {
+    const maxCap = getFleetMaxWeight(baseBooking.vehicle_category);
+    const sampleWeight = Math.min(200, Math.max(40, Math.round(maxCap * 0.28)));
+    const samplePct = Math.round((sampleWeight / maxCap) * 100);
+    const distKm = calculateDistanceKm(baseBooking.pickup_hub, baseBooking.drop_hub);
+    const sampleFare = Math.round((150 + distKm * 15) / 10) * 10;
+    const generatedOtp = Math.floor(1000 + Math.random() * 9000).toString();
+    const startCoords = getHubCoords(baseBooking.pickup_hub);
+
+    const merchants = ['Sri Lakshmi Electricals', 'Peenya Precision Gears', 'Nandi Hardware & Tools', 'Balaji Textiles & Co.'];
+    const randomMerchant = merchants[Math.floor(Math.random() * merchants.length)];
+
+    await supabase.from('bookings').insert([
+      {
+        customer_name: randomMerchant,
+        customer_phone: userSession,
+        pickup_hub: baseBooking.pickup_hub,
+        drop_hub: baseBooking.drop_hub,
+        cargo_type: `Co-Loader Parcel: ${randomMerchant} (6 Boxes)`,
+        package_units: '6 Boxes',
+        weight_kg: sampleWeight,
+        vehicle_category: baseBooking.vehicle_category,
+        offered_fare: sampleFare,
+        status: 'broadcasting',
+        pickup_otp: generatedOtp,
+        pod_status: 'PART_LOAD_READY_TO_STACK',
+        driver_lat: startCoords.lat,
+        driver_lng: startCoords.lng,
+        route_progress: 0,
+        is_shared_load: true,
+        truck_utilization_pct: samplePct,
+        has_insurance: true
+      }
+    ]);
+
+    setStatusMessage(
+      `➕ Spawned "${randomMerchant}" (${sampleWeight} kg / ${samplePct}% Deck Space) on ${baseBooking.pickup_hub.split('/')[0]} → ${baseBooking.drop_hub.split('/')[0]}! Click "Stack Onto My Truck" below.`
+    );
+    setTimeout(() => setStatusMessage(''), 4500);
+    fetchLiveCloudData();
   };
 
   const handleCreateSampleReturnLoad = async (originHub, targetReturnHub) => {
@@ -469,7 +607,7 @@ export default function App() {
         drop_hub: targetReturnHub,
         cargo_type: 'Return Backhaul: Machined Castings (8 Crates)',
         package_units: '8 Crates',
-        weight_kg: 480,
+        weight_kg: 180,
         vehicle_category: '3W',
         offered_fare: estFare,
         status: 'broadcasting',
@@ -479,7 +617,7 @@ export default function App() {
         driver_lng: startCoords.lng,
         route_progress: 0,
         is_shared_load: true,
-        truck_utilization_pct: 45,
+        truck_utilization_pct: 36,
         has_insurance: true
       }
     ]);
@@ -490,6 +628,12 @@ export default function App() {
 
   const handleDriverDirectAccept = async (booking) => {
     const startCoords = getHubCoords(booking.pickup_hub);
+    const poolId =
+      booking.pool_group_id ||
+      (booking.is_shared_load
+        ? `POOL-${booking.pickup_hub.slice(0, 3).toUpperCase()}-${Math.floor(100 + Math.random() * 900)}`
+        : null);
+
     await supabase.from('bookings').update({
       status: 'accepted',
       agreed_fare: booking.offered_fare,
@@ -500,13 +644,13 @@ export default function App() {
       driver_lat: startCoords.lat,
       driver_lng: startCoords.lng,
       route_progress: 10,
+      pool_group_id: poolId,
       last_gps_ping: new Date().toISOString()
     }).eq('id', booking.id);
 
-    // Mark driver as no longer idle at stand once they accept a job
     await supabase.from('idle_vehicles').update({ is_idle: false }).eq('rc_number', rcNumber);
 
-    setStatusMessage(`✅ Load Accepted at ₹${booking.offered_fare}! Live GPS Tracking Activated.`);
+    setStatusMessage(`✅ Load Accepted at ₹${booking.offered_fare}! You can now stack additional Part-Loads onto your remaining truck space.`);
     setTimeout(() => setStatusMessage(''), 4000);
     fetchLiveCloudData();
   };
@@ -579,47 +723,15 @@ export default function App() {
       return;
     }
     const startCoords = getHubCoords(booking.pickup_hub);
-    let currentLat = startCoords.lat;
-    let currentLng = startCoords.lng;
-
-    if (navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(
-        async (pos) => {
-          currentLat = Number(pos.coords.latitude.toFixed(5));
-          currentLng = Number(pos.coords.longitude.toFixed(5));
-          await supabase.from('bookings').update({
-            status: 'in_transit',
-            pod_status: 'IN_TRANSIT_LIVE_GPS',
-            driver_lat: currentLat,
-            driver_lng: currentLng,
-            route_progress: 25,
-            last_gps_ping: new Date().toISOString()
-          }).eq('id', booking.id);
-          fetchLiveCloudData();
-        },
-        async () => {
-          await supabase.from('bookings').update({
-            status: 'in_transit',
-            pod_status: 'IN_TRANSIT_LIVE_GPS',
-            driver_lat: currentLat,
-            driver_lng: currentLng,
-            route_progress: 25,
-            last_gps_ping: new Date().toISOString()
-          }).eq('id', booking.id);
-          fetchLiveCloudData();
-        }
-      );
-    } else {
-      await supabase.from('bookings').update({
-        status: 'in_transit',
-        pod_status: 'IN_TRANSIT_LIVE_GPS',
-        driver_lat: currentLat,
-        driver_lng: currentLng,
-        route_progress: 25,
-        last_gps_ping: new Date().toISOString()
-      }).eq('id', booking.id);
-      fetchLiveCloudData();
-    }
+    await supabase.from('bookings').update({
+      status: 'in_transit',
+      pod_status: 'IN_TRANSIT_LIVE_GPS',
+      driver_lat: startCoords.lat,
+      driver_lng: startCoords.lng,
+      route_progress: 25,
+      last_gps_ping: new Date().toISOString()
+    }).eq('id', booking.id);
+    fetchLiveCloudData();
   };
 
   const handleDeliver = async (booking) => {
@@ -656,6 +768,8 @@ export default function App() {
     if (b.status !== 'broadcasting') return true;
     return calculateDistanceKm(driverBaseHub, b.pickup_hub) <= radiusFilterKm;
   });
+
+  const segmentColors = ['bg-emerald-400', 'bg-cyan-400', 'bg-amber-400', 'bg-purple-400'];
 
   // ============================================================================
   // 1. RENDER LOGIN SCREEN
@@ -972,7 +1086,7 @@ export default function App() {
                   <label className="text-xs text-emerald-400 font-semibold block mb-1">Pickup Hub</label>
                   <select
                     value={pickupHub}
-                    onChange={(e) => setPickupHub(e.target.value)}
+                    onChange={(e) => { setPickupHub(e.target.value); setSelectedPoolGroupId(null); }}
                     className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2.5 text-sm text-white"
                   >
                     {BENGALURU_HUBS.map((h) => (
@@ -985,7 +1099,7 @@ export default function App() {
                   <label className="text-xs text-rose-400 font-semibold block mb-1">Drop-Off Hub</label>
                   <select
                     value={dropHub}
-                    onChange={(e) => setDropHub(e.target.value)}
+                    onChange={(e) => { setDropHub(e.target.value); setSelectedPoolGroupId(null); }}
                     className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2.5 text-sm text-white"
                   >
                     {BENGALURU_HUBS.map((h) => (
@@ -1111,19 +1225,20 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* FEATURE #8: SHARED CARGO POOLING (PART-LOAD) & ₹49 CARGO INSURANCE */}
-                <div className="space-y-2.5 bg-slate-950 p-3.5 rounded-xl border border-cyan-500/30">
+                {/* MULTI-ORDER SHARED CARGO CLUBBING ENGINE */}
+                <div className="space-y-3 bg-slate-950 p-3.5 rounded-xl border border-cyan-500/40">
                   <div className="flex justify-between items-center text-xs">
                     <span className="text-cyan-300 font-bold flex items-center gap-1.5">
-                      <Layers className="w-4 h-4" /> Truck Deck Utilization: {utilizationPct}%
+                      <Layers className="w-4 h-4" /> Your Cargo Deck Footprint: {utilizationPct}%
                     </span>
-                    <span className="text-[11px] text-slate-400">
-                      {100 - utilizationPct}% Empty Space Available
+                    <span className="text-[11px] text-emerald-300 font-semibold">
+                      {100 - utilizationPct}% Space Free to Club
                     </span>
                   </div>
-                  <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
+
+                  <div className="w-full bg-slate-800 h-2.5 rounded-full overflow-hidden">
                     <div
-                      className="bg-gradient-to-r from-cyan-400 to-amber-400 h-full transition-all duration-300"
+                      className="bg-gradient-to-r from-cyan-400 to-emerald-400 h-full transition-all duration-300"
                       style={{ width: `${utilizationPct}%` }}
                     />
                   </div>
@@ -1131,19 +1246,72 @@ export default function App() {
                   <label className="flex items-center justify-between gap-2 pt-2 border-t border-slate-800 cursor-pointer">
                     <div>
                       <span className="text-xs font-bold text-emerald-300 block">
-                        🤝 Share Truck Space (Part-Load Pooling)
+                        🤝 Enable Shared Truck Clubbing (Save 30% Fare)
                       </span>
                       <span className="text-[11px] text-slate-400">
-                        Split deck with corridor loads & save 30% on fare
+                        Allow driver to club your {weightKg} kg load with other shippers on this route
                       </span>
                     </div>
                     <input
                       type="checkbox"
                       checked={isSharedLoad}
-                      onChange={(e) => setIsSharedLoad(e.target.checked)}
+                      onChange={(e) => {
+                        setIsSharedLoad(e.target.checked);
+                        if (!e.target.checked) setSelectedPoolGroupId(null);
+                      }}
                       className="w-4 h-4 accent-emerald-500 cursor-pointer"
                     />
                   </label>
+
+                  {/* SHOW EXISTING ACTIVE SHARED TRUCK POOLS ON THIS CORRIDOR THAT CUSTOMER CAN JOIN */}
+                  {isSharedLoad && availableCorridorPools.length > 0 && (
+                    <div className="bg-cyan-500/10 border border-cyan-500/40 rounded-xl p-2.5 space-y-2 text-xs">
+                      <div className="font-bold text-cyan-300 flex items-center gap-1">
+                        🚛 Active Shared Truck Pools on {pickupHub.split('/')[0]} → {dropHub.split('/')[0]}:
+                      </div>
+                      {availableCorridorPools.map((pool) => {
+                        const usedPct = Math.round((pool.usedWeightKg / pool.maxCapacityKg) * 100);
+                        const combinedPct = Math.min(100, usedPct + utilizationPct);
+                        const isJoined = selectedPoolGroupId === pool.poolId;
+
+                        return (
+                          <div
+                            key={pool.poolId}
+                            className={`p-2.5 rounded-lg border transition ${
+                              isJoined
+                                ? 'bg-emerald-500/20 border-emerald-400'
+                                : 'bg-slate-900 border-slate-800'
+                            }`}
+                          >
+                            <div className="flex justify-between items-center">
+                              <span className="font-black text-white">
+                                {pool.poolId} ({pool.vehicleCategory} • {pool.orders.length} Order{pool.orders.length > 1 ? 's' : ''})
+                              </span>
+                              <span className="text-[10px] bg-cyan-500/20 text-cyan-200 px-2 py-0.5 rounded font-bold">
+                                {usedPct}% Used + Your {utilizationPct}% = {combinedPct}% Full
+                              </span>
+                            </div>
+                            <div className="text-[11px] text-slate-400 mt-1">
+                              Current Load: {pool.usedWeightKg} / {pool.maxCapacityKg} kg ({pool.maxCapacityKg - pool.usedWeightKg} kg free)
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setSelectedPoolGroupId(isJoined ? null : pool.poolId)}
+                              className={`mt-2 w-full py-1.5 rounded-lg font-black text-xs cursor-pointer transition ${
+                                isJoined
+                                  ? 'bg-emerald-500 text-slate-950'
+                                  : 'bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-500/40'
+                              }`}
+                            >
+                              {isJoined
+                                ? `✅ Joined Truck Pool ${pool.poolId} (Click Broadcast Below)`
+                                : `🔗 Club My Load Into ${pool.poolId}`}
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
 
                   <label className="flex items-center justify-between gap-2 pt-2 border-t border-slate-800 cursor-pointer">
                     <div>
@@ -1191,15 +1359,17 @@ export default function App() {
                   className="w-full bg-amber-500 hover:bg-amber-400 text-slate-950 font-black py-3 rounded-xl shadow-lg transition flex items-center justify-center gap-2 text-sm cursor-pointer"
                 >
                   <Truck className="w-5 h-5" />
-                  {directDispatchDriver
+                  {selectedPoolGroupId
+                    ? `Club Order Into ${selectedPoolGroupId} (₹${customFare})`
+                    : directDispatchDriver
                     ? `Direct Dispatch ${directDispatchDriver.rc_number} (₹${customFare})`
-                    : `Broadcast Load (₹{customFare})`.replace('{customFare}', customFare)}
+                    : `Broadcast Load (₹${customFare})`}
                 </button>
               </form>
             </div>
 
             <div className="lg:col-span-7 space-y-6">
-              {/* FEATURE #7: LIVE DIGITAL TEMPO STAND (IDLE VEHICLES READY FOR CARGO) */}
+              {/* LIVE DIGITAL TEMPO STAND */}
               <div className="bg-slate-900 border border-emerald-500/30 rounded-2xl p-5 space-y-3 shadow-xl">
                 <div className="flex flex-wrap justify-between items-center gap-2">
                   <div>
@@ -1264,6 +1434,15 @@ export default function App() {
                   const liveRemKm = calculateCoordsDistanceKm(vLat, vLng, dHub.lat, dHub.lng);
                   const etaMins = Math.max(3, Math.round(liveRemKm * 2.4));
 
+                  // Find all orders clubbed in the same shared truck pool!
+                  const clubbedPoolOrders = b.pool_group_id
+                    ? bookings.filter((other) => other.pool_group_id === b.pool_group_id)
+                    : [b];
+                  const maxTruckKg = getFleetMaxWeight(b.vehicle_category);
+                  const totalPoolKg = clubbedPoolOrders.reduce((acc, item) => acc + Number(item.weight_kg || 0), 0);
+                  const totalPoolPct = Math.min(100, Math.round((totalPoolKg / maxTruckKg) * 100));
+                  const totalPoolFare = clubbedPoolOrders.reduce((acc, item) => acc + Number(item.agreed_fare || item.offered_fare || 0), 0);
+
                   return (
                     <div key={b.id} className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-3 shadow-lg">
                       <div className="flex flex-wrap justify-between items-center gap-2 border-b border-slate-800 pb-3">
@@ -1272,9 +1451,9 @@ export default function App() {
                             {b.vehicle_category}
                           </span>
                           <span className="font-bold text-white text-sm">{b.cargo_type} ({b.weight_kg} kg)</span>
-                          {b.is_shared_load && (
-                            <span className="text-[10px] bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 px-2 py-0.5 rounded font-bold">
-                              🤝 Shared Pool ({b.truck_utilization_pct || 35}% Deck)
+                          {b.pool_group_id && (
+                            <span className="text-[10px] bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 px-2 py-0.5 rounded font-mono font-bold">
+                              🔗 {b.pool_group_id} ({clubbedPoolOrders.length} Clubbed)
                             </span>
                           )}
                           {b.has_insurance && (
@@ -1298,6 +1477,49 @@ export default function App() {
                           </span>
                         </div>
                       </div>
+
+                      {/* VISUAL MULTI-ORDER CONSOLIDATED TRUCK DECK BAR */}
+                      {b.is_shared_load && (
+                        <div className="bg-slate-950 border border-cyan-500/30 rounded-xl p-3 space-y-2 text-xs">
+                          <div className="flex flex-wrap justify-between items-center gap-2">
+                            <span className="text-cyan-300 font-bold flex items-center gap-1">
+                              <Layers className="w-3.5 h-3.5" /> Consolidated Truck Deck ({clubbedPoolOrders.length} Shipper{clubbedPoolOrders.length > 1 ? 's' : ''} Clubbed):
+                            </span>
+                            <span className="font-mono text-emerald-300 font-bold">
+                              {totalPoolKg} / {maxTruckKg} kg ({totalPoolPct}% Full • {100 - totalPoolPct}% Free)
+                            </span>
+                          </div>
+
+                          {/* Multi-colored segmented progress bar showing each customer's share of the truck */}
+                          <div className="w-full bg-slate-800 h-3 rounded-full overflow-hidden flex">
+                            {clubbedPoolOrders.map((ord, idx) => {
+                              const segPct = Math.max(5, Math.round((Number(ord.weight_kg) / maxTruckKg) * 100));
+                              return (
+                                <div
+                                  key={ord.id}
+                                  style={{ width: `${segPct}%` }}
+                                  className={`${segmentColors[idx % segmentColors.length]} h-full border-r border-slate-950 transition-all duration-500`}
+                                  title={`${ord.customer_name}: ${ord.weight_kg} kg (${segPct}%)`}
+                                />
+                              );
+                            })}
+                          </div>
+
+                          <div className="flex flex-wrap gap-2 pt-1">
+                            {clubbedPoolOrders.map((ord, idx) => {
+                              const segPct = Math.round((Number(ord.weight_kg) / maxTruckKg) * 100);
+                              return (
+                                <span
+                                  key={ord.id}
+                                  className="text-[10px] bg-slate-900 border border-slate-800 px-2 py-0.5 rounded text-slate-300"
+                                >
+                                  <b className="text-white">{ord.customer_name}:</b> {ord.weight_kg}kg ({segPct}%) • ₹{ord.agreed_fare || ord.offered_fare}
+                                </span>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
 
                       <div className="grid grid-cols-2 gap-3 text-xs">
                         <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
@@ -1345,9 +1567,14 @@ export default function App() {
                       <div className="flex justify-between items-center bg-slate-950 px-4 py-2.5 rounded-xl border border-slate-800">
                         <div>
                           <span className="text-xs text-slate-400">
-                            {b.agreed_fare ? 'Locked Deal Fare (0% Fee): ' : 'Initial Lister Offer: '}
+                            {b.agreed_fare ? 'Your Locked Share Fare: ' : 'Your Offer Fare: '}
                           </span>
                           <span className="font-black text-amber-400 text-sm">₹{b.agreed_fare || b.offered_fare}</span>
+                          {clubbedPoolOrders.length > 1 && (
+                            <span className="text-[11px] text-emerald-400 font-bold ml-2">
+                              (Combined Truck Pool Payout: ₹{totalPoolFare})
+                            </span>
+                          )}
                         </div>
                         <div>
                           <span className="text-xs text-slate-400">Pickup OTP: </span>
@@ -1426,11 +1653,6 @@ export default function App() {
                                   🛡️ Transit Insurance Active: Covered up to ₹2,00,000
                                 </div>
                               )}
-                              {b.eway_bill_no && (
-                                <div className="text-slate-400">
-                                  E-Way Bill: <span className="text-amber-300 font-mono">{b.eway_bill_no}</span>
-                                </div>
-                              )}
                               <div className="text-[11px] text-slate-400 font-mono">
                                 Delivered: {new Date(b.delivered_at || b.created_at || Date.now()).toLocaleString()}
                               </div>
@@ -1483,7 +1705,6 @@ export default function App() {
                     </select>
                   </div>
 
-                  {/* FEATURE #7: BROADCAST IDLE VEHICLE AT STAND BUTTON */}
                   <div className="bg-slate-950 p-3.5 rounded-xl border border-emerald-500/40 space-y-2">
                     <div className="flex justify-between items-center text-xs">
                       <span className="font-bold text-white">Digital Tempo Stand Status:</span>
@@ -1560,6 +1781,27 @@ export default function App() {
                 const vLat = b.driver_lat || getHubCoords(b.pickup_hub).lat;
                 const vLng = b.driver_lng || getHubCoords(b.pickup_hub).lng;
 
+                // Calculate Consolidated Pool Orders on this Truck
+                const clubbedPoolOrders = b.pool_group_id
+                  ? bookings.filter((other) => other.pool_group_id === b.pool_group_id)
+                  : [b];
+                const maxTruckKg = getFleetMaxWeight(b.vehicle_category);
+                const totalPoolKg = clubbedPoolOrders.reduce((acc, item) => acc + Number(item.weight_kg || 0), 0);
+                const remainingDeckKg = Math.max(0, maxTruckKg - totalPoolKg);
+                const totalPoolPct = Math.min(100, Math.round((totalPoolKg / maxTruckKg) * 100));
+                const totalPoolFare = clubbedPoolOrders.reduce((acc, item) => acc + Number(item.agreed_fare || item.offered_fare || 0), 0);
+
+                // Find other open broadcasting loads on the SAME corridor that fit inside the remaining truck weight!
+                const stackableCorridorLoads = bookings.filter(
+                  (other) =>
+                    other.id !== b.id &&
+                    (!b.pool_group_id || other.pool_group_id !== b.pool_group_id) &&
+                    other.status === 'broadcasting' &&
+                    other.pickup_hub === b.pickup_hub &&
+                    other.drop_hub === b.drop_hub &&
+                    Number(other.weight_kg) <= remainingDeckKg
+                );
+
                 const matchingReturnLoads = bookings.filter(
                   (other) =>
                     other.id !== b.id &&
@@ -1575,9 +1817,9 @@ export default function App() {
                           {b.vehicle_category}
                         </span>
                         <span className="font-bold text-white text-sm">{b.cargo_type} ({b.weight_kg} kg)</span>
-                        {b.is_shared_load && (
-                          <span className="text-[10px] bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 px-2 py-0.5 rounded font-bold">
-                            🤝 Part-Load ({100 - (b.truck_utilization_pct || 35)}% Deck Free to Stack!)
+                        {b.pool_group_id && (
+                          <span className="text-[10px] bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 px-2 py-0.5 rounded font-mono font-bold">
+                            🔗 {b.pool_group_id} ({clubbedPoolOrders.length} Orders Clubbed)
                           </span>
                         )}
                         {b.has_insurance && (
@@ -1588,10 +1830,99 @@ export default function App() {
                       </div>
                       <div className="text-right">
                         <span className="text-xl font-black text-amber-400 block">₹{b.agreed_fare || b.offered_fare}</span>
+                        {clubbedPoolOrders.length > 1 && (
+                          <span className="text-[11px] text-emerald-300 font-black block">
+                            Total Pool Payout: ₹{totalPoolFare}
+                          </span>
+                        )}
                         <span className="text-[10px] bg-emerald-500/10 text-emerald-400 px-2 py-0.5 rounded font-bold">
                           📍 {distFromDriver} km from your stand
                         </span>
                       </div>
+                    </div>
+
+                    {/* DRIVER-SIDE MULTI-ORDER STACKING / CLUBBING ENGINE */}
+                    <div className="bg-slate-950 border border-cyan-500/40 rounded-xl p-3.5 space-y-2.5 text-xs">
+                      <div className="flex flex-wrap justify-between items-center gap-2">
+                        <span className="text-cyan-300 font-black flex items-center gap-1.5">
+                          <Layers className="w-4 h-4" /> TRUCK DECK CAPACITY: {totalPoolKg} / {maxTruckKg} kg ({totalPoolPct}% Full)
+                        </span>
+                        <span className="text-emerald-300 font-bold">
+                          {remainingDeckKg} kg ({100 - totalPoolPct}%) Free Space to Club Orders
+                        </span>
+                      </div>
+
+                      <div className="w-full bg-slate-800 h-3 rounded-full overflow-hidden flex">
+                        {clubbedPoolOrders.map((ord, idx) => {
+                          const segPct = Math.max(5, Math.round((Number(ord.weight_kg) / maxTruckKg) * 100));
+                          return (
+                            <div
+                              key={ord.id}
+                              style={{ width: `${segPct}%` }}
+                              className={`${segmentColors[idx % segmentColors.length]} h-full border-r border-slate-950 transition-all duration-500`}
+                            />
+                          );
+                        })}
+                      </div>
+
+                      <div className="flex flex-wrap gap-1.5">
+                        {clubbedPoolOrders.map((ord, idx) => (
+                          <span key={ord.id} className="text-[10px] bg-slate-900 border border-slate-800 px-2 py-0.5 rounded text-slate-200">
+                            #{idx + 1} <b>{ord.customer_name}</b> ({ord.weight_kg}kg • ₹{ord.agreed_fare || ord.offered_fare})
+                          </span>
+                        ))}
+                      </div>
+
+                      {/* IF SPACE REMAINS, LET DRIVER STACK COMPATIBLE CORRIDOR ORDERS WITH 1 CLICK */}
+                      {remainingDeckKg > 20 && (
+                        <div className="pt-2 border-t border-slate-800 space-y-2">
+                          {stackableCorridorLoads.length > 0 ? (
+                            <div className="space-y-1.5">
+                              <span className="text-[11px] text-amber-300 font-bold block">
+                                📦 {stackableCorridorLoads.length} Compatible Corridor Load(s) Ready to Club Onto Your Truck:
+                              </span>
+                              {stackableCorridorLoads.map((coLoad) => (
+                                <div
+                                  key={coLoad.id}
+                                  className="bg-slate-900 border border-cyan-500/30 p-2 rounded-lg flex flex-wrap justify-between items-center gap-2"
+                                >
+                                  <div>
+                                    <div className="font-bold text-white">
+                                      {coLoad.customer_name}: {coLoad.cargo_type}
+                                    </div>
+                                    <div className="text-[11px] text-slate-400">
+                                      Weight: {coLoad.weight_kg} kg (+{Math.round((coLoad.weight_kg / maxTruckKg) * 100)}% Deck)
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-black text-emerald-400">+₹{coLoad.offered_fare}</span>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDriverClubOrderIntoPool(b, coLoad)}
+                                      className="bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-black px-3 py-1 rounded-lg cursor-pointer"
+                                    >
+                                      + Stack Onto My Truck
+                                    </button>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="flex flex-wrap justify-between items-center gap-2">
+                              <span className="text-[11px] text-slate-400">
+                                Have {remainingDeckKg} kg empty space left? Spawn a 2nd corridor order to test multi-order clubbing:
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => handleSimulateSecondPoolOrder(b)}
+                                className="bg-slate-800 hover:bg-cyan-500 hover:text-slate-950 text-cyan-300 border border-cyan-500/40 font-bold px-2.5 py-1 rounded-lg text-[11px] flex items-center gap-1 cursor-pointer transition"
+                              >
+                                <PlusCircle className="w-3.5 h-3.5" /> + Simulate 2nd Order to Club
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
 
                     <div className="grid grid-cols-2 gap-3 text-xs">
